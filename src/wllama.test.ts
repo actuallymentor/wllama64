@@ -87,6 +87,36 @@ test.sequential('loads single thread model', async () => {
   await wllama.exit();
 });
 
+test.sequential(
+  'cleans up after a failed load so the instance can retry',
+  async () => {
+    const wllama = createWllama();
+    const invalidModel = new File(
+      [new Uint8Array([0, 1, 2, 3])],
+      'invalid.gguf'
+    );
+
+    await expect(
+      wllama.loadModel([invalidModel], {
+        n_gpu_layers: 0,
+        n_threads: 1,
+      })
+    ).rejects.toThrow('Model failed to load');
+    expect(wllama.isModelLoaded()).toBe(false);
+
+    try {
+      await wllama.loadModelFromUrl(TINY_MODEL, {
+        n_ctx: 256,
+        n_gpu_layers: 0,
+        n_threads: 1,
+      });
+      expect(wllama.isModelLoaded()).toBe(true);
+    } finally {
+      await wllama.exit();
+    }
+  }
+);
+
 test.sequential('loads model with progress callback', async () => {
   const wllama = createWllama();
 

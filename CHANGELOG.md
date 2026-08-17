@@ -12,3 +12,4 @@
 
 - Preserve cross-origin cache recovery. (dcb0eb9)
 - Keep large content-addressed cache writes transactional and recover incomplete entries. (225dfe6)
+- Clean up failed native model loads so the same instance can retry.
