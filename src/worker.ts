@@ -83,6 +83,8 @@ export interface WllamaWorkerResources {
   jsPath?: string | { code: string } | undefined;
   // in compat mode, mem64 must be disabled
   compat: boolean;
+  // skip WebGPU device initialization entirely (e.g. when n_gpu_layers is 0)
+  noWebGPU?: boolean;
 }
 
 export class ProxyToWorker {
@@ -94,7 +96,6 @@ export class ProxyToWorker {
   resultQueue: Task[] = [];
   busy = false; // is the work loop is running?
   worker?: Worker | undefined;
-  terminated = false;
   maxFileReadSize = 0;
   multiThread: boolean;
   nbThread: number;
@@ -139,14 +140,13 @@ export class ProxyToWorker {
   }
 
   async moduleInit(ggufFiles: { name: string; blob: Blob }[]): Promise<void> {
-    if (this.terminated) {
-      throw new WllamaRuntimeError('Wllama worker was terminated', '');
-    }
     let moduleCode = JSPI_STUB + (await this.getModuleCode());
-    if (this.terminated) {
-      throw new WllamaRuntimeError('Wllama worker was terminated', '');
+    if (this.resources.noWebGPU) {
+      // make requestAdapter() resolve to null so ggml-webgpu skips device registration
+      moduleCode =
+        'try{Object.defineProperty(WorkerNavigator.prototype,"gpu",{get:()=>({requestAdapter:async()=>null})});}catch(e){}' +
+        moduleCode;
     }
-
     let mainModuleCode = moduleCode.replace('var Module', 'var ___Module');
     const runOptions = {
       pathConfig: {
@@ -162,8 +162,7 @@ export class ProxyToWorker {
     ].join(';\n\n');
     this.worker = createWorker(completeCode);
     this.worker.onmessage = this.onRecvMsg.bind(this);
-    this.worker.onerror = this.onWorkerError.bind(this);
-    this.worker.onmessageerror = this.onWorkerMessageError.bind(this);
+    this.worker.onerror = this.logger.error;
 
     const res = await this.pushTask({
       verb: 'module.init',
@@ -227,9 +226,17 @@ export class ProxyToWorker {
   }
 
   async wllamaExit(): Promise<void> {
-    // we don't actually need to send exit; terminating the worker is faster
-    // and resources will be cleaned up by the browser
-    this.terminate('Wllama worker was terminated', '');
+    if (this.worker) {
+      // we don't actually need to send exit
+      // terminating the worker is faster and resources will be cleaned up by the browser
+      // const result = await this.pushTask({
+      //   verb: 'wllama.exit',
+      //   args: [],
+      //   callbackId: this.taskId++,
+      // });
+      // this.parseResult(result); // only check for exceptions
+      this.worker.terminate();
+    }
   }
 
   async wllamaDebug(): Promise<any> {
@@ -305,7 +312,9 @@ export class ProxyToWorker {
       );
     } catch (err) {
       this.logger.error('fileReadResponse failed, terminating worker:', err);
-      this.terminate(`File read failed: ${err}`, (err as Error).stack || '');
+      this.worker?.terminate();
+      this.worker = undefined;
+      this.abort(`File read failed: ${err}`, (err as Error).stack || '');
     }
   }
 
@@ -328,10 +337,6 @@ export class ProxyToWorker {
    */
   private pushTask(param: TaskParam, buffers?: ArrayBuffer[]) {
     return new Promise<any>((resolve, reject) => {
-      if (this.terminated) {
-        reject(new WllamaRuntimeError('Wllama worker was terminated', ''));
-        return;
-      }
       this.taskQueue.push({ resolve, reject, param, buffers });
       this.runTaskLoop();
     });
@@ -388,10 +393,9 @@ export class ProxyToWorker {
       if (originalErr) {
         this.logger.error(originalErr);
       }
-      const messageText = String(message);
       (async () => {
         let stack = '';
-        let newMsg = messageText.replace(
+        let newMsg = message.replace(
           'Build with -sASSERTIONS for more info.',
           ''
         );
@@ -401,18 +405,10 @@ export class ProxyToWorker {
         } else if (signalType === 'exception') {
           stack = rawStack;
         }
-        try {
-          const decoded = await Debug.decodeStackTrace(stack, isCompatBuild);
-          this.logger.error(`Stack trace (${signalType}):\n` + decoded);
-          this.abort(newMsg, decoded);
-        } catch (error) {
-          this.logger.error('Failed to decode the worker stack trace:', error);
-          this.abort(newMsg, stack);
-        }
-      })().catch((error) => {
-        this.logger.error('Failed to handle a worker abort:', error);
-        this.abort(messageText, rawStack);
-      });
+        const decoded = await Debug.decodeStackTrace(stack, isCompatBuild);
+        this.logger.error(`Stack trace (${signalType}):\n` + decoded);
+        this.abort(newMsg, decoded);
+      })();
       return;
     }
 
@@ -439,36 +435,6 @@ export class ProxyToWorker {
         );
       }
     }
-  }
-
-  private onWorkerError(event: ErrorEvent) {
-    const details = [
-      event.message || 'Wllama worker failed',
-      event.filename,
-      event.lineno,
-      event.colno,
-    ]
-      .filter(Boolean)
-      .join(':');
-    const error =
-      event.error instanceof Error ? event.error : new Error(details);
-
-    this.logger.error(error);
-    this.terminate(error.message, error.stack ?? '');
-  }
-
-  private onWorkerMessageError(event: MessageEvent) {
-    const error = new Error('Wllama worker returned an unreadable message');
-
-    this.logger.error(error, event);
-    this.terminate(error.message, error.stack ?? '');
-  }
-
-  private terminate(text: string, stack: string) {
-    this.terminated = true;
-    this.worker?.terminate();
-    this.worker = undefined;
-    this.abort(text, stack);
   }
 
   private abort(text: string, stack: string) {

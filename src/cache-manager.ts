@@ -2,7 +2,6 @@ import { getHFFileSHA256 } from './huggingface';
 import type { DownloadProgressCallback } from './model-manager';
 import { COSBackend } from './storage/cos';
 import type { StorageBackend, StorageFileHint } from './storage/index';
-import { throwIfAborted } from './utils';
 
 const PREFIX_METADATA = '__metadata__';
 
@@ -123,55 +122,48 @@ export class CacheManager {
   }
 
   async download(url: string, options: DownloadOptions = {}): Promise<void> {
-    throwIfAborted(options.signal);
     const fileKey = await urlToFileName(url, '');
-    throwIfAborted(options.signal);
 
     // Fetch sha256 before the GET so we can skip the download entirely if the
     // file is already in COS (avoids opening a connection just to cancel it).
-    const sha256 = await getHFFileSHA256(
-      url,
-      options.headers ?? {},
-      options.signal
-    );
-    throwIfAborted(options.signal);
+    const sha256 = await getHFFileSHA256(url, options.headers ?? {});
     const hint = sha256 ? { sha256 } : undefined;
 
-    const cachedSize = hint ? await this.sb.getSize(fileKey, hint) : -1;
-    if (hint && cachedSize !== -1) {
-      throwIfAborted(options.signal);
-      // File already in COS. Metadata is origin-local (OPFS), so it may be
-      // absent on a different origin or after a crash between write and
-      // writeMetadata. Ensure it exists before returning.
-      const metadata = await this.getMetadata(fileKey);
-      throwIfAborted(options.signal);
-      if (metadata?.originalSize === cachedSize) return;
-
-      if (!metadata) {
-        const head = await fetch(url, {
-          method: 'HEAD',
-          ...(options.headers ? { headers: options.headers } : {}),
-          ...(options.signal ? { signal: options.signal } : {}),
-        });
-        const contentLength = head.headers.get('content-length');
-        const etag = (head.headers.get('etag') || '').replace(
-          /[^A-Za-z0-9]/g,
-          ''
-        );
-        throwIfAborted(options.signal);
-        const originalSize = parseInt(contentLength ?? '0', 10);
-        if (originalSize === cachedSize) {
-          await this.writeMetadata(fileKey, {
-            originalURL: url,
-            originalSize,
-            etag,
-            sha256,
-            ...(options.metadataAdditional ?? {}),
-          });
-          throwIfAborted(options.signal);
-          return;
-        }
+    const cachedSize = await this.sb.getSize(fileKey, hint);
+    if (cachedSize !== -1) {
+      const metadata = await this.readMetadata(fileKey);
+      if (
+        metadata?.originalURL === url &&
+        metadata.originalSize === cachedSize
+      ) {
+        return;
       }
+      // no metadata, file maybe partial; ask server for the real size
+      const head = await fetch(url, {
+        method: 'HEAD',
+        ...(options.headers ? { headers: options.headers } : {}),
+      });
+      const originalSize = parseInt(
+        head.headers.get('content-length') ?? '0',
+        10
+      );
+      const etag = (head.headers.get('etag') || '').replace(
+        /[^A-Za-z0-9]/g,
+        ''
+      );
+      if (originalSize > 0 && originalSize === cachedSize) {
+        await this.writeMetadata(fileKey, {
+          originalURL: url,
+          originalSize,
+          etag,
+          sha256,
+          ...(options.metadataAdditional ?? {}),
+        });
+        return;
+      }
+      // size mismatch, drop the file and download it again
+      await this.sb.delete(fileKey);
+      await this.sb.delete(`${PREFIX_METADATA}${fileKey}`);
     }
 
     const response = await fetch(url, {
@@ -226,7 +218,6 @@ export class CacheManager {
       response.body.pipeThrough(progressStream),
       hint
     );
-    throwIfAborted(options.signal);
     await this.writeMetadata(fileKey, metadata);
   }
 
@@ -263,19 +254,26 @@ export class CacheManager {
    * Get metadata of a cached file
    */
   async getMetadata(name: string): Promise<CacheEntryMetadata | null> {
-    const blob = await this.sb.read(`${PREFIX_METADATA}${name}`);
+    const metadata = await this.readMetadata(name);
+    if (metadata) return metadata;
     const cachedSize = await this.sb.getSize(name);
-    if (!blob) {
-      return cachedSize > 0
-        ? // files created by older version of wllama don't have metadata; polyfill it
-          {
-            etag: POLYFILL_ETAG,
-            originalSize: cachedSize,
-            originalURL: '',
-          }
-        : // cached file not found
-          null;
-    }
+    return cachedSize > 0
+      ? // files created by older version of wllama don't have metadata; polyfill it
+        {
+          etag: POLYFILL_ETAG,
+          originalSize: cachedSize,
+          originalURL: '',
+        }
+      : // cached file not found
+        null;
+  }
+
+  /**
+   * Same as `getMetadata()`, but without polyfill. Returns null if the file has no metadata.
+   */
+  private async readMetadata(name: string): Promise<CacheEntryMetadata | null> {
+    const blob = await this.sb.read(`${PREFIX_METADATA}${name}`);
+    if (!blob) return null;
     try {
       return await new Response(blob).json();
     } catch (e) {
@@ -316,9 +314,8 @@ export class CacheManager {
       }
     }
 
-    // COS keeps the data outside OPFS, so its local directory only contains
-    // metadata. Rehydrate those entries through their content hash; otherwise
-    // a new ModelManager instance cannot discover an already cached model.
+    // COS keeps data outside OPFS, so another origin can have metadata without
+    // a local file entry. Recover those entries through the content hash.
     for (const [name, metadata] of Object.entries(metadataMap)) {
       if (result.some((entry) => entry.name === name)) continue;
 

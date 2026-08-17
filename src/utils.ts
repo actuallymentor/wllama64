@@ -8,12 +8,6 @@ export const joinBuffers = (buffers: Uint8Array[]): Uint8Array => {
   return output;
 };
 
-export const throwIfAborted = (signal?: AbortSignal) => {
-  if (signal?.aborted) {
-    throw new DOMException('The operation was aborted', 'AbortError');
-  }
-};
-
 const textDecoder = new TextDecoder();
 
 /**
@@ -156,7 +150,9 @@ export const isMmproj = async (blob: Blob): Promise<boolean> => {
 export const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const absoluteUrl = (relativePath: string) =>
-  new URL(relativePath, document.baseURI).href;
+  typeof document === 'undefined'
+    ? new URL(relativePath, self.location.href).href
+    : new URL(relativePath, document.baseURI).href;
 
 export const padDigits = (number: number, digits: number) => {
   return (

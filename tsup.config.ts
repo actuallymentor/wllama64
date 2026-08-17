@@ -15,7 +15,8 @@ const baseConfig: Options = {
 const browserConfig: Options = {
   ...baseConfig,
   platform: 'browser',
-  target: 'es2015',
+  // Memory64 and its JavaScript API require BigInt-capable browsers.
+  target: 'es2020',
   splitting: false,
   outDir: 'esm',
 };

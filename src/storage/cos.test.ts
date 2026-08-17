@@ -1,7 +1,6 @@
 import { test, expect, beforeEach } from 'vitest';
 import { CacheManager } from '../cache-manager';
 import { COSBackend, mockCOS } from './cos';
-import type { StorageBackend } from './index';
 
 let onCOSWrite: (() => void) | undefined;
 let cosWriteError: Error | undefined;
@@ -206,67 +205,3 @@ test.sequential('read missing key returns null', async () => {
   const blob = await backend.read('non-existent-key', { sha256 });
   expect(blob).toBeNull();
 });
-
-test.sequential(
-  'abort signal cancels cached model metadata lookup',
-  async () => {
-    const sha256 = 'a'.repeat(64);
-    const writes: string[] = [];
-    const backend: StorageBackend = {
-      isSupported: () => true,
-      read: async () => null,
-      write: async (key) => {
-        writes.push(key);
-      },
-      getSize: async (_key, hint) => (hint ? 1024 : -1),
-      list: async () => [],
-      delete: async () => {},
-    };
-    const cache = new CacheManager([backend]);
-    const originalFetch = globalThis.fetch;
-    let headSignal!: AbortSignal;
-    let markHeadStarted!: () => void;
-    const headStarted = new Promise<void>((resolve) => {
-      markHeadStarted = resolve;
-    });
-    globalThis.fetch = ((input, init) => {
-      const url = String(input);
-      if (url.includes('/raw/')) {
-        return Promise.resolve(new Response(`oid sha256:${sha256}`));
-      }
-      if (init?.method === 'HEAD') {
-        headSignal = init.signal!;
-        markHeadStarted();
-        return new Promise((_, reject) => {
-          headSignal.addEventListener(
-            'abort',
-            () =>
-              reject(
-                new DOMException('The operation was aborted', 'AbortError')
-              ),
-            { once: true }
-          );
-        });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    }) as typeof fetch;
-
-    const controller = new AbortController();
-    const downloading = cache.download(
-      'https://huggingface.co/example/model/resolve/main/model.gguf',
-      { signal: controller.signal }
-    );
-    try {
-      await headStarted;
-      const rejected = expect(downloading).rejects.toThrow('aborted');
-      controller.abort();
-
-      expect(headSignal.aborted).toBe(true);
-      await rejected;
-      expect(writes).toEqual([]);
-    } finally {
-      controller.abort();
-      globalThis.fetch = originalFetch;
-    }
-  }
-);

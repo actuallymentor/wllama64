@@ -16,6 +16,7 @@ import {
 import CacheManager, { type DownloadOptions } from './cache-manager';
 import { ModelManager, Model, type ModelSource } from './model-manager';
 import type {
+  GlueMsgCancelRes,
   GlueMsgCompletionRes,
   GlueMsgEmbeddingRes,
   GlueMsgRerankRes,
@@ -171,10 +172,6 @@ export class Wllama {
   private compat: WllamaCompat | null = null;
 
   private proxy: ProxyToWorker = null as any;
-  private loadingProxy: ProxyToWorker = null as any;
-  private loadingAbortController: AbortController = null as any;
-  private isLoading: boolean = false;
-  private loadGeneration: number = 0;
   private config: WllamaConfig;
   private pathConfig: AssetsPathConfig;
   private useMultiThread: boolean = false;
@@ -227,54 +224,6 @@ export class Wllama {
         'loadModel() is not yet called',
         'model_not_loaded'
       );
-    }
-  }
-
-  private checkModelLoadActive(loadGeneration: number, signal: AbortSignal) {
-    if (loadGeneration !== this.loadGeneration || signal.aborted) {
-      throw new WllamaAbortError();
-    }
-  }
-
-  private async runModelLoad(
-    callback: (loadGeneration: number, signal: AbortSignal) => Promise<void>,
-    signal?: AbortSignal
-  ): Promise<void> {
-    if (this.proxy || this.isLoading) {
-      throw new WllamaError('Module is already initialized', 'load_error');
-    }
-
-    this.isLoading = true;
-    const loadGeneration = ++this.loadGeneration;
-    const abortController = new AbortController();
-    const abort = () => abortController.abort();
-    this.loadingAbortController = abortController;
-
-    if (signal?.aborted) abort();
-    else signal?.addEventListener('abort', abort, { once: true });
-
-    try {
-      this.checkModelLoadActive(loadGeneration, abortController.signal);
-      await callback(loadGeneration, abortController.signal);
-      this.checkModelLoadActive(loadGeneration, abortController.signal);
-    } catch (error) {
-      const loadedProxy = this.proxy as ProxyToWorker;
-      if (
-        loadGeneration === this.loadGeneration &&
-        abortController.signal.aborted &&
-        loadedProxy
-      ) {
-        this.proxy = null as any;
-        await loadedProxy.wllamaExit();
-      }
-      this.checkModelLoadActive(loadGeneration, abortController.signal);
-      throw error;
-    } finally {
-      signal?.removeEventListener('abort', abort);
-      if (this.loadingAbortController === abortController) {
-        this.loadingAbortController = null as any;
-      }
-      if (loadGeneration === this.loadGeneration) this.isLoading = false;
     }
   }
 
@@ -473,12 +422,15 @@ export class Wllama {
     modelSourceOrURL: ModelSource | string,
     params: LoadModelParams & DownloadOptions & { useCache?: boolean } = {}
   ): Promise<void> {
-    return await this.runModelLoad(async (loadGeneration, signal) => {
-      const source: ModelSource = isString(modelSourceOrURL)
-        ? ({ url: modelSourceOrURL } as ModelSource)
-        : (modelSourceOrURL as ModelSource);
-      await this.loadModelFromSource(source, params, loadGeneration, signal);
-    }, params.signal);
+    const source: ModelSource = isString(modelSourceOrURL)
+      ? ({ url: modelSourceOrURL } as ModelSource)
+      : (modelSourceOrURL as ModelSource);
+    const useCache = params.useCache ?? true;
+    const model = useCache
+      ? await this.modelManager.getModelOrDownload(source, params)
+      : await this.modelManager.downloadModel(source, params);
+    const blobs = await model.open();
+    return await this.loadModel(blobs, params);
   }
 
   /**
@@ -491,11 +443,8 @@ export class Wllama {
     hfOptions: HuggingFaceParams,
     params: LoadModelParams & DownloadOptions & { useCache?: boolean } = {}
   ) {
-    return await this.runModelLoad(async (loadGeneration, signal) => {
-      const source = await getHFModelSource(hfOptions, signal);
-      this.checkModelLoadActive(loadGeneration, signal);
-      await this.loadModelFromSource(source, params, loadGeneration, signal);
-    }, params.signal);
+    const source = await getHFModelSource(hfOptions);
+    return await this.loadModelFromUrl(source, params);
   }
 
   /**
@@ -510,40 +459,10 @@ export class Wllama {
     ggufBlobsOrModel: Blob[] | Model,
     params: LoadModelParams = {}
   ): Promise<void> {
-    return await this.runModelLoad(async (loadGeneration, signal) => {
-      const blobs: Blob[] =
-        ggufBlobsOrModel instanceof Model
-          ? await ggufBlobsOrModel.open()
-          : [...(ggufBlobsOrModel as Blob[])]; // copy array
-      this.checkModelLoadActive(loadGeneration, signal);
-      await this.loadModelBlobs(blobs, params, loadGeneration, signal);
-    });
-  }
-
-  private async loadModelFromSource(
-    source: ModelSource,
-    params: LoadModelParams & DownloadOptions & { useCache?: boolean },
-    loadGeneration: number,
-    signal: AbortSignal
-  ): Promise<void> {
-    const useCache = params.useCache ?? true;
-    const downloadOptions = { ...params, signal };
-    const model = useCache
-      ? await this.modelManager.getModelOrDownload(source, downloadOptions)
-      : await this.modelManager.downloadModel(source, downloadOptions);
-    this.checkModelLoadActive(loadGeneration, signal);
-
-    const blobs = await model.open();
-    this.checkModelLoadActive(loadGeneration, signal);
-    await this.loadModelBlobs(blobs, params, loadGeneration, signal);
-  }
-
-  private async loadModelBlobs(
-    blobs: Blob[],
-    params: LoadModelParams,
-    loadGeneration: number,
-    signal: AbortSignal
-  ): Promise<void> {
+    const blobs: Blob[] =
+      ggufBlobsOrModel instanceof Model
+        ? await ggufBlobsOrModel.open()
+        : [...(ggufBlobsOrModel as Blob[])]; // copy array
     if (blobs.some((b) => b.size === 0)) {
       throw new WllamaError(
         'Input model (or splits) must be non-empty Blob or File',
@@ -557,165 +476,149 @@ export class Wllama {
       );
     }
 
-    let proxy: ProxyToWorker = null as any;
-    try {
-      // detect if we can use multi-thread and webgpu
-      const supportMultiThread = await isSupportMultiThread();
-      this.checkModelLoadActive(loadGeneration, signal);
-
-      const hwConccurency = Math.floor(
-        (navigator.hardwareConcurrency || 1) / 2
-      );
-      const nbThreads = params.n_threads ?? hwConccurency;
-      this.nbThreads = nbThreads;
-      this.useMultiThread = supportMultiThread && nbThreads > 1;
-
-      // initialize the worker
-      const workerResources = this.getWorkerResources();
-      proxy = new ProxyToWorker(
-        workerResources,
-        this.useMultiThread ? nbThreads : 0, // 0 means disable pthread
-        this.config.suppressNativeLog ?? false,
-        this.logger()
-      );
-      this.loadingProxy = proxy;
-      let logLevel = params.log_level ?? LogLevel.INFO;
-      if (this.config.suppressNativeLog) {
-        logLevel = 9999 as any;
-      }
-
-      const modelFiles = await prepareBlobs(blobs);
-      this.checkModelLoadActive(loadGeneration, signal);
-      await proxy.moduleInit(modelFiles.all);
-      this.checkModelLoadActive(loadGeneration, signal);
-
-      // run it
-      this.logger().debug('Calling wllamaStart...');
-      const startResult: any = await proxy.wllamaStart();
-      this.checkModelLoadActive(loadGeneration, signal);
-      if (!startResult.success) {
-        throw new WllamaError(
-          `Error while calling start function, result = ${startResult}`
-        );
-      }
-
-      // load the model
-      this.logger().debug('Loading model...');
-      const loadResult: GlueMsgLoadRes = await proxy.wllamaAction('load', {
-        _name: 'load_req',
-        log_level: logLevel,
-        // if async read is not supported, use mmap; refer to README-dev.md for more details
-        use_mmap: !canUseAsyncFileRead(workerResources.compat),
-        use_mlock: false,
-        n_gpu_layers: params.n_gpu_layers ?? 99999,
-        n_ctx: params.n_ctx ?? 1024,
-        n_threads: this.useMultiThread ? nbThreads : 1,
-        n_ctx_auto: false, // not supported for now
-        mmproj_path: modelFiles.mmproj
-          ? `/models/${MMPROJ_FILE_NAME}`
-          : undefined,
-        model_paths: modelFiles.llm.map((f) => `models/${f.name}`),
-        embeddings: params.embeddings,
-        offload_kqv: params.offload_kqv,
-        n_batch: params.n_batch,
-        pooling_type: params.pooling_type as string,
-        rope_scaling_type: params.rope_scaling_type as string,
-        rope_freq_base: params.rope_freq_base,
-        rope_freq_scale: params.rope_freq_scale,
-        yarn_ext_factor: params.yarn_ext_factor,
-        yarn_attn_factor: params.yarn_attn_factor,
-        yarn_beta_fast: params.yarn_beta_fast,
-        yarn_beta_slow: params.yarn_beta_slow,
-        yarn_orig_ctx: params.yarn_orig_ctx,
-        cache_type_k: params.cache_type_k as string,
-        cache_type_v: params.cache_type_v as string,
-        n_parallel: 1, // only support single sequence for now
-        kv_unified: false, // TODO: support kv unified cache
-        flash_attn: params.flash_attn,
-        swa_full: params.swa_full,
-        chat_template: params.chat_template,
-        jinja: params.jinja,
-        reasoning: params.reasoning,
-        image_min_tokens: params.image_min_tokens,
-        image_max_tokens: params.image_max_tokens,
-        warmup: params.warmup,
-        no_kv_offload: params.no_kv_offload,
-        mmproj_offload: params.mmproj_offload,
-        cont_batching: params.cont_batching,
-        n_keep: params.n_keep,
-        ctx_shift: params.ctx_shift,
-        cache_idle_slots: params.cache_idle_slots,
-        n_cache_reuse: params.n_cache_reuse,
-        lora_paths: params.lora_adapters?.map((a) => a.path),
-        lora_scales: params.lora_adapters?.map((a) => a.scale ?? 1.0),
-        lora_init_without_apply: params.lora_init_without_apply,
-        spec_draft_model: params.spec_draft_model,
-        spec_draft_ngl: params.spec_draft_ngl,
-        spec_draft_n_max: params.spec_draft_n_max,
-        spec_draft_n_min: params.spec_draft_n_min,
-        spec_draft_p_min: params.spec_draft_p_min,
-        spec_draft_threads: params.spec_draft_threads,
-        spec_draft_threads_batch: params.spec_draft_threads_batch,
-        kv_overrides_keys: params.kv_overrides
-          ? Object.keys(params.kv_overrides)
-          : undefined,
-        kv_overrides_vals: params.kv_overrides
-          ? Object.values(params.kv_overrides)
-          : undefined,
-        reasoning_budget_tokens: params.reasoning_budget_tokens,
-        reasoning_budget_message: params.reasoning_budget_message,
-        reasoning_format: params.reasoning_format,
-        skip_chat_parsing: params.skip_chat_parsing,
-        prefill_assistant: params.prefill_assistant,
-      });
-      this.checkModelLoadActive(loadGeneration, signal);
-      if (!loadResult.success) {
-        throw new WllamaError(
-          'Model failed to load; see native logs for details',
-          'load_error'
-        );
-      }
-      const loadedCtxInfo: LoadedContextInfo & GlueMsgLoadRes = {
-        ...loadResult,
-        metadata: {},
-      };
-      for (let i = 0; i < loadResult.metadata_key.length; i++) {
-        loadedCtxInfo.metadata[loadResult.metadata_key[i]] =
-          loadResult.metadata_val[i];
-      }
-      this.seed = params.seed;
-      this.bosToken = loadedCtxInfo.token_bos;
-      this.eosToken = loadedCtxInfo.token_eos;
-      this.eotToken = loadedCtxInfo.token_eot;
-      this.useEmbeddings = !!params.embeddings;
-      this.useRerank = params.pooling_type == 'rank';
-      this.metadata = {
-        hparams: {
-          nVocab: loadedCtxInfo.n_vocab,
-          nCtxTrain: loadedCtxInfo.n_ctx_train,
-          nEmbd: loadedCtxInfo.n_embd,
-          nLayer: loadedCtxInfo.n_layer,
-        },
-        meta: loadedCtxInfo.metadata,
-      };
-      this.hasEncoder = !!loadedCtxInfo.has_encoder;
-      this.decoderStartToken = loadedCtxInfo.token_decoder_start;
-      this.addBosToken = loadedCtxInfo.add_bos_token;
-      this.addEosToken = loadedCtxInfo.add_eos_token;
-      this.chatTemplate = loadedCtxInfo.metadata['tokenizer.chat_template'];
-      this.loadedContextInfo = loadedCtxInfo;
-      this.eogTokens = new Set(loadedCtxInfo.list_tokens_eog);
-      this.mediaMarker = loadedCtxInfo.media_marker;
-      this.chatTemplateKwargs = params.default_template_kwargs ?? {};
-      this.proxy = proxy;
-      this.loadingProxy = null as any;
-    } catch (error) {
-      await proxy?.wllamaExit();
-      throw error;
-    } finally {
-      if (this.loadingProxy === proxy) this.loadingProxy = null as any;
+    if (this.proxy) {
+      throw new WllamaError('Module is already initialized', 'load_error');
     }
-    this.logger().debug({ loadedCtxInfo: this.loadedContextInfo });
+    // detect if we can use multi-thread and webgpu
+    const supportMultiThread = await isSupportMultiThread();
+    const hwConccurency = Math.floor((navigator.hardwareConcurrency || 1) / 2);
+    const nbThreads = params.n_threads ?? hwConccurency;
+    this.nbThreads = nbThreads;
+    this.useMultiThread = supportMultiThread && nbThreads > 1;
+
+    // initialize the worker
+    const workerResources = this.getWorkerResources();
+    if (params.n_gpu_layers === 0) {
+      // skip WebGPU device initialization when the user asks for CPU-only
+      workerResources.noWebGPU = true;
+    }
+    this.proxy = new ProxyToWorker(
+      workerResources,
+      this.useMultiThread ? nbThreads : 0, // 0 means disable pthread
+      this.config.suppressNativeLog ?? false,
+      this.logger()
+    );
+    let logLevel = params.log_level ?? LogLevel.INFO;
+    if (this.config.suppressNativeLog) {
+      logLevel = 9999 as any;
+    }
+
+    const modelFiles = await prepareBlobs(blobs);
+    await this.proxy.moduleInit(modelFiles.all);
+
+    // run it
+    this.logger().debug('Calling wllamaStart...');
+    const startResult: any = await this.proxy.wllamaStart();
+    if (!startResult.success) {
+      throw new WllamaError(
+        `Error while calling start function, result = ${startResult}`
+      );
+    }
+
+    // load the model
+    this.logger().debug('Loading model...');
+    const loadResult: GlueMsgLoadRes = await this.proxy.wllamaAction('load', {
+      _name: 'load_req',
+      log_level: logLevel,
+      // if async read is not supported, use mmap; refer to README-dev.md for more details
+      use_mmap: !canUseAsyncFileRead(workerResources.compat),
+      use_mlock: false,
+      n_gpu_layers: params.n_gpu_layers ?? 99999,
+      n_ctx: params.n_ctx ?? 1024,
+      n_threads: this.useMultiThread ? nbThreads : 1,
+      n_ctx_auto: false, // not supported for now
+      mmproj_path: modelFiles.mmproj
+        ? `/models/${MMPROJ_FILE_NAME}`
+        : undefined,
+      model_paths: modelFiles.llm.map((f) => `models/${f.name}`),
+      embeddings: params.embeddings,
+      offload_kqv: params.offload_kqv,
+      n_batch: params.n_batch,
+      n_ubatch: params.n_ubatch,
+      pooling_type: params.pooling_type as string,
+      rope_scaling_type: params.rope_scaling_type as string,
+      rope_freq_base: params.rope_freq_base,
+      rope_freq_scale: params.rope_freq_scale,
+      yarn_ext_factor: params.yarn_ext_factor,
+      yarn_attn_factor: params.yarn_attn_factor,
+      yarn_beta_fast: params.yarn_beta_fast,
+      yarn_beta_slow: params.yarn_beta_slow,
+      yarn_orig_ctx: params.yarn_orig_ctx,
+      cache_type_k: params.cache_type_k as string,
+      cache_type_v: params.cache_type_v as string,
+      // with unified KV, all sequences share one n_ctx cache, so each request can still use the full context
+      n_parallel: params.n_parallel ?? 4,
+      kv_unified: params.kv_unified ?? true,
+      flash_attn: params.flash_attn,
+      swa_full: params.swa_full,
+      chat_template: params.chat_template,
+      jinja: params.jinja,
+      reasoning: params.reasoning,
+      image_min_tokens: params.image_min_tokens,
+      image_max_tokens: params.image_max_tokens,
+      warmup: params.warmup,
+      no_kv_offload: params.no_kv_offload,
+      mmproj_offload: params.mmproj_offload,
+      cont_batching: params.cont_batching,
+      n_keep: params.n_keep,
+      ctx_shift: params.ctx_shift,
+      cache_idle_slots: params.cache_idle_slots,
+      n_cache_reuse: params.n_cache_reuse,
+      lora_paths: params.lora_adapters?.map((a) => a.path),
+      lora_scales: params.lora_adapters?.map((a) => a.scale ?? 1.0),
+      lora_init_without_apply: params.lora_init_without_apply,
+      spec_draft_model: params.spec_draft_model,
+      spec_draft_ngl: params.spec_draft_ngl,
+      spec_draft_n_max: params.spec_draft_n_max,
+      spec_draft_n_min: params.spec_draft_n_min,
+      spec_draft_p_min: params.spec_draft_p_min,
+      spec_draft_threads: params.spec_draft_threads,
+      spec_draft_threads_batch: params.spec_draft_threads_batch,
+      kv_overrides_keys: params.kv_overrides
+        ? Object.keys(params.kv_overrides)
+        : undefined,
+      kv_overrides_vals: params.kv_overrides
+        ? Object.values(params.kv_overrides)
+        : undefined,
+      reasoning_budget_tokens: params.reasoning_budget_tokens,
+      reasoning_budget_message: params.reasoning_budget_message,
+      reasoning_format: params.reasoning_format,
+      skip_chat_parsing: params.skip_chat_parsing,
+      prefill_assistant: params.prefill_assistant,
+    });
+    const loadedCtxInfo: LoadedContextInfo & GlueMsgLoadRes = {
+      ...loadResult,
+      metadata: {},
+    };
+    for (let i = 0; i < loadResult.metadata_key.length; i++) {
+      loadedCtxInfo.metadata[loadResult.metadata_key[i]] =
+        loadResult.metadata_val[i];
+    }
+    this.seed = params.seed;
+    this.bosToken = loadedCtxInfo.token_bos;
+    this.eosToken = loadedCtxInfo.token_eos;
+    this.eotToken = loadedCtxInfo.token_eot;
+    this.useEmbeddings = !!params.embeddings;
+    this.useRerank = params.pooling_type == 'rank';
+    this.metadata = {
+      hparams: {
+        nVocab: loadedCtxInfo.n_vocab,
+        nCtxTrain: loadedCtxInfo.n_ctx_train,
+        nEmbd: loadedCtxInfo.n_embd,
+        nLayer: loadedCtxInfo.n_layer,
+      },
+      meta: loadedCtxInfo.metadata,
+    };
+    this.hasEncoder = !!loadedCtxInfo.has_encoder;
+    this.decoderStartToken = loadedCtxInfo.token_decoder_start;
+    this.addBosToken = loadedCtxInfo.add_bos_token;
+    this.addEosToken = loadedCtxInfo.add_eos_token;
+    this.chatTemplate = loadedCtxInfo.metadata['tokenizer.chat_template'];
+    this.loadedContextInfo = loadedCtxInfo;
+    this.eogTokens = new Set(loadedCtxInfo.list_tokens_eog);
+    this.mediaMarker = loadedCtxInfo.media_marker;
+    this.chatTemplateKwargs = params.default_template_kwargs ?? {};
+    this.logger().debug({ loadedCtxInfo });
   }
 
   getLoadedContextInfo(): LoadedContextInfo {
@@ -763,7 +666,7 @@ export class Wllama {
       );
     }
 
-    return await this.getResponse(options as any, false);
+    return await this.getResponse(options as any, false, result.req_id);
   }
 
   /**
@@ -801,7 +704,9 @@ export class Wllama {
         );
       }
 
-      const { score, tokens_evaluated } = await this.getRerankResult();
+      const { score, tokens_evaluated } = await this.getRerankResult(
+        result.req_id
+      );
       totalTokens += tokens_evaluated;
       rawResults.push({ index: i, score });
     }
@@ -925,7 +830,8 @@ export class Wllama {
 
     return await this.getResponse(
       options as StreamParams<TChunk> & { abortSignal?: AbortSignal },
-      isStream
+      isStream,
+      result.req_id
     );
   }
 
@@ -976,17 +882,8 @@ export class Wllama {
    * Note: This function will NOT crash if model is not yet loaded
    */
   async exit(): Promise<void> {
-    const proxies = new Set([this.proxy, this.loadingProxy].filter(Boolean));
-
-    this.loadingAbortController?.abort();
-    this.loadGeneration += 1;
-    this.isLoading = false;
+    await this.proxy?.wllamaExit();
     this.proxy = null as any;
-    this.loadingProxy = null as any;
-    this.loadingAbortController = null as any;
-    await Promise.all(
-      [...proxies].map((proxy: ProxyToWorker) => proxy.wllamaExit())
-    );
   }
 
   /**
@@ -1115,87 +1012,122 @@ export class Wllama {
     };
   }
 
-  private async getRerankResult(): Promise<{
+  // release the slot occupied by the request; cancelling an already-finished request is a no-op
+  private async cancelRequest(reqId: number): Promise<void> {
+    try {
+      await this.proxy.wllamaAction<GlueMsgCancelRes>('cancel', {
+        _name: 'cncl_req',
+        req_id: reqId,
+      });
+    } catch (e) {
+      this.logger().warn('Failed to cancel request', reqId, e);
+    }
+  }
+
+  private async getRerankResult(reqId: number): Promise<{
     score: number;
     tokens_evaluated: number;
   }> {
-    while (true) {
-      const chunk = await this.proxy.wllamaAction<GlueMsgGetResultRes>(
-        'get_result',
-        { _name: 'gres_req' }
-      );
+    let completed = false;
+    try {
+      while (true) {
+        const chunk = await this.proxy.wllamaAction<GlueMsgGetResultRes>(
+          'get_result',
+          { _name: 'gres_req', req_id: reqId }
+        );
 
-      const jsonString = chunk.data_json;
-      if (jsonString && jsonString.length > 0) {
-        if (chunk.is_error) {
-          const jsonData = this.jsonDecode(jsonString);
-          throw new WllamaError(
-            jsonData.message || 'Unknown reranking error',
-            'inference_error'
-          );
+        const jsonString = chunk.data_json;
+        if (jsonString && jsonString.length > 0) {
+          if (chunk.is_error) {
+            const jsonData = this.jsonDecode(jsonString);
+            throw new WllamaError(
+              jsonData.message || 'Unknown reranking error',
+              'inference_error'
+            );
+          }
+          completed = true;
+          return this.jsonDecode(jsonString);
         }
-        return this.jsonDecode(jsonString);
+
+        if (!chunk.has_more) {
+          completed = true;
+          break;
+        }
       }
 
-      if (!chunk.has_more) break;
+      throw new WllamaError('No reranking result received', 'inference_error');
+    } finally {
+      if (!completed) {
+        await this.cancelRequest(reqId);
+      }
     }
-
-    throw new WllamaError('No reranking result received', 'inference_error');
   }
 
   private async getResponse(
     options: StreamParams<any> & { abortSignal?: AbortSignal },
-    isStream: boolean
+    isStream: boolean,
+    reqId: number
   ) {
     let finalResult: any = null;
+    let completed = false;
 
-    while (true) {
-      if (options.abortSignal?.aborted) {
-        throw new WllamaAbortError();
-      }
-      const result_chunk = await this.proxy.wllamaAction<GlueMsgGetResultRes>(
-        'get_result',
-        {
-          _name: 'gres_req',
+    try {
+      while (true) {
+        if (options.abortSignal?.aborted) {
+          throw new WllamaAbortError();
         }
-      );
-
-      const jsonString = result_chunk.data_json;
-      if (!jsonString || jsonString.length === 0) {
-        if (!result_chunk.has_more) {
-          break;
-        } else {
-          continue;
-        }
-      }
-
-      if (jsonString == 'null') {
-        continue; // this is the "is_begin = true" chunk on server side, we can ignore it
-      }
-
-      let jsonData = this.jsonDecode(jsonString);
-      finalResult = jsonData;
-      if (result_chunk.is_error) {
-        this.logger().error('Model returned an error:', jsonData);
-        throw new WllamaError(
-          jsonData.message || 'Unknown inference error',
-          'inference_error'
+        const result_chunk = await this.proxy.wllamaAction<GlueMsgGetResultRes>(
+          'get_result',
+          {
+            _name: 'gres_req',
+            req_id: reqId,
+          }
         );
-      }
 
-      if (isStream) {
-        if (!Array.isArray(jsonData)) {
-          jsonData = [jsonData];
+        const jsonString = result_chunk.data_json;
+        if (!jsonString || jsonString.length === 0) {
+          if (!result_chunk.has_more) {
+            completed = true;
+            break;
+          } else {
+            continue;
+          }
         }
 
-        for (const chunk of jsonData) {
-          options.onData?.(chunk);
-          finalResult = chunk;
+        if (jsonString == 'null') {
+          continue; // this is the "is_begin = true" chunk on server side, we can ignore it
+        }
+
+        let jsonData = this.jsonDecode(jsonString);
+        finalResult = jsonData;
+        if (result_chunk.is_error) {
+          this.logger().error('Model returned an error:', jsonData);
+          throw new WllamaError(
+            jsonData.message || 'Unknown inference error',
+            'inference_error'
+          );
+        }
+
+        if (isStream) {
+          if (!Array.isArray(jsonData)) {
+            jsonData = [jsonData];
+          }
+
+          for (const chunk of jsonData) {
+            options.onData?.(chunk);
+            finalResult = chunk;
+          }
+        }
+
+        if (!result_chunk.has_more) {
+          completed = true;
+          break;
         }
       }
-
-      if (!result_chunk.has_more) {
-        break;
+    } finally {
+      // any exit before the final chunk (abort, decode error, onData throw) must free the slot
+      if (!completed) {
+        await this.cancelRequest(reqId);
       }
     }
 

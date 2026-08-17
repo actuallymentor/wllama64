@@ -10,6 +10,7 @@
 /cache
 /scripts/memory64_stress*
 /compat
+/dev
 /.github
 /.vscode
 /.claude

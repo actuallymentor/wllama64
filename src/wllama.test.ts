@@ -1,5 +1,4 @@
 import { test, expect, beforeEach } from 'vitest';
-import { Model } from './model-manager';
 
 declare const __GITHUB_CI__: boolean;
 
@@ -88,286 +87,6 @@ test.sequential('loads single thread model', async () => {
   await wllama.exit();
 });
 
-test.sequential('rejects invalid model content', async () => {
-  const wllama = createWllama();
-  const invalidModel = new Blob([
-    new TextEncoder().encode('not a valid GGUF model'),
-  ]);
-
-  await expect(
-    wllama.loadModel([invalidModel], {
-      n_gpu_layers: 0,
-      n_threads: 1,
-    })
-  ).rejects.toThrow();
-  expect(wllama.isModelLoaded()).toBe(false);
-
-  await wllama.exit();
-});
-
-test.sequential('retries after worker initialization fails', async () => {
-  const config = { default: '/missing-wllama.wasm' };
-  const wllama = createWllama(config);
-
-  await expect(
-    wllama.loadModelFromUrl(TINY_MODEL, {
-      n_ctx: 256,
-      n_gpu_layers: 0,
-      n_threads: 1,
-    })
-  ).rejects.toThrow();
-  expect(wllama.isModelLoaded()).toBe(false);
-
-  config.default = CONFIG_PATHS.default;
-  await wllama.loadModelFromUrl(TINY_MODEL, {
-    n_ctx: 256,
-    n_gpu_layers: 0,
-    n_threads: 1,
-  });
-
-  expect(wllama.isModelLoaded()).toBe(true);
-  await wllama.exit();
-});
-
-test.sequential('rejects concurrent model initialization', async () => {
-  const wllama = createWllama();
-  const model = await fetch(TINY_MODEL).then((response) => response.blob());
-  const loading = wllama.loadModel([model], {
-    n_ctx: 256,
-    n_gpu_layers: 0,
-    n_threads: 1,
-  });
-
-  await expect(
-    wllama.loadModel([model], {
-      n_ctx: 256,
-      n_gpu_layers: 0,
-      n_threads: 1,
-    })
-  ).rejects.toThrow('Module is already initialized');
-  await loading;
-
-  expect(wllama.isModelLoaded()).toBe(true);
-  await wllama.exit();
-});
-
-test.sequential('cancels model download on exit', async () => {
-  let downloadSignal!: AbortSignal;
-  let markDownloadStarted!: () => void;
-  const downloadStarted = new Promise<void>((resolve) => {
-    markDownloadStarted = resolve;
-  });
-  const modelManager = {
-    getModelOrDownload(
-      _source: unknown,
-      options: { signal?: AbortSignal }
-    ): Promise<never> {
-      downloadSignal = options.signal!;
-      markDownloadStarted();
-      return new Promise((_, reject) => {
-        downloadSignal.addEventListener(
-          'abort',
-          () =>
-            reject(new DOMException('The operation was aborted', 'AbortError')),
-          { once: true }
-        );
-      });
-    },
-  } as any;
-  const wllama = createWllama(CONFIG_PATHS, { modelManager });
-  const loading = wllama.loadModelFromUrl(TINY_MODEL, {
-    n_ctx: 256,
-    n_gpu_layers: 0,
-    n_threads: 1,
-  });
-
-  await downloadStarted;
-  const rejected = expect(loading).rejects.toThrow('Operation aborted');
-  await wllama.exit();
-
-  expect(downloadSignal.aborted).toBe(true);
-  await rejected;
-  expect(wllama.isModelLoaded()).toBe(false);
-});
-
-test.sequential('cancels model preparation requests on exit', async () => {
-  const originalFetch = globalThis.fetch;
-  const modelUrl =
-    'https://huggingface.co/example/model/resolve/main/model.gguf';
-  let headSignal!: AbortSignal;
-  let shaSignal!: AbortSignal;
-  let markShaStarted!: () => void;
-  const shaStarted = new Promise<void>((resolve) => {
-    markShaStarted = resolve;
-  });
-  globalThis.fetch = ((input, init) => {
-    const url = String(input);
-    if (init?.method === 'HEAD') {
-      headSignal = init.signal!;
-      return Promise.resolve(
-        new Response(null, { headers: { 'content-length': '1024' } })
-      );
-    }
-    if (url.includes('/raw/')) {
-      shaSignal = init?.signal!;
-      markShaStarted();
-      return new Promise((_, reject) => {
-        shaSignal.addEventListener(
-          'abort',
-          () =>
-            reject(new DOMException('The operation was aborted', 'AbortError')),
-          { once: true }
-        );
-      });
-    }
-    throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
-
-  const wllama = createWllama();
-  const loading = wllama.loadModelFromUrl(modelUrl, { useCache: false });
-  try {
-    await shaStarted;
-    const rejected = expect(loading).rejects.toThrow('Operation aborted');
-    await wllama.exit();
-
-    expect(headSignal).toBe(shaSignal);
-    expect(headSignal.aborted).toBe(true);
-    await rejected;
-    expect(wllama.isModelLoaded()).toBe(false);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await wllama.exit();
-  }
-});
-
-test.sequential('cancels Hugging Face discovery on exit', async () => {
-  const originalFetch = globalThis.fetch;
-  let discoverySignal!: AbortSignal;
-  let markDiscoveryStarted!: () => void;
-  const discoveryStarted = new Promise<void>((resolve) => {
-    markDiscoveryStarted = resolve;
-  });
-  globalThis.fetch = ((_input, init) => {
-    discoverySignal = init?.signal!;
-    markDiscoveryStarted();
-    return new Promise((_, reject) => {
-      discoverySignal.addEventListener(
-        'abort',
-        () =>
-          reject(new DOMException('The operation was aborted', 'AbortError')),
-        { once: true }
-      );
-    });
-  }) as typeof fetch;
-
-  const wllama = createWllama();
-  const loading = wllama.loadModelFromHF({
-    repo: 'example/model',
-    file: 'model.gguf',
-  });
-  try {
-    await discoveryStarted;
-    const rejected = expect(loading).rejects.toThrow('Operation aborted');
-    await wllama.exit();
-
-    expect(discoverySignal.aborted).toBe(true);
-    await rejected;
-    expect(wllama.isModelLoaded()).toBe(false);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await wllama.exit();
-  }
-});
-
-test.sequential('does not resume model opening after exit', async () => {
-  let markOpenStarted!: () => void;
-  let resolveOpen!: (blobs: Blob[]) => void;
-  const openStarted = new Promise<void>((resolve) => {
-    markOpenStarted = resolve;
-  });
-  const openResult = new Promise<Blob[]>((resolve) => {
-    resolveOpen = resolve;
-  });
-  const model = Object.create(Model.prototype) as Model;
-  model.open = () => {
-    markOpenStarted();
-    return openResult;
-  };
-  const wllama = createWllama();
-  const loading = wllama.loadModel(model, {
-    n_ctx: 256,
-    n_gpu_layers: 0,
-    n_threads: 1,
-  });
-
-  await openStarted;
-  const rejected = expect(loading).rejects.toThrow('Operation aborted');
-  await wllama.exit();
-  resolveOpen([new Blob(['model data'])]);
-
-  await rejected;
-  expect(wllama.isModelLoaded()).toBe(false);
-});
-
-test.sequential('rejects an abort during the final load handoff', async () => {
-  const modelBlob = await fetch(TINY_MODEL).then((response) => response.blob());
-  const abortController = new AbortController();
-  const modelManager = {
-    async getModelOrDownload() {
-      return { open: async () => [modelBlob] };
-    },
-  } as any;
-  const logger = {
-    debug(message: unknown) {
-      if (
-        typeof message === 'object' &&
-        message !== null &&
-        'loadedCtxInfo' in message
-      ) {
-        queueMicrotask(() => abortController.abort());
-      }
-    },
-    log: console.log,
-    warn: console.warn,
-    error: console.error,
-  };
-  const wllama = createWllama(CONFIG_PATHS, { logger, modelManager });
-
-  await expect(
-    wllama.loadModelFromUrl(TINY_MODEL, {
-      signal: abortController.signal,
-      n_ctx: 256,
-      n_gpu_layers: 0,
-      n_threads: 1,
-    })
-  ).rejects.toThrow('Operation aborted');
-
-  expect(wllama.isModelLoaded()).toBe(false);
-  await wllama.exit();
-});
-
-test.sequential('cancels model initialization on exit', async () => {
-  const wllama = createWllama();
-  const model = await fetch(TINY_MODEL).then((response) => response.blob());
-  const loading = wllama.loadModel([model], {
-    n_ctx: 256,
-    n_gpu_layers: 0,
-    n_threads: 1,
-  });
-
-  await wllama.exit();
-  await expect(loading).rejects.toThrow('Operation aborted');
-  expect(wllama.isModelLoaded()).toBe(false);
-
-  await wllama.loadModel([model], {
-    n_ctx: 256,
-    n_gpu_layers: 0,
-    n_threads: 1,
-  });
-  expect(wllama.isModelLoaded()).toBe(true);
-  await wllama.exit();
-});
-
 test.sequential('loads model with progress callback', async () => {
   const wllama = createWllama();
 
@@ -422,6 +141,39 @@ test.sequential('generates completion', async () => {
   expect(res).toBeDefined();
   expect(res.choices[0].text).toMatch(/(there|little|girl|Lily)+/);
   expect(res.choices[0].text.length).toBeGreaterThan(10);
+
+  await wllama.exit();
+});
+
+test.sequential('generates completions in parallel', async () => {
+  const wllama = createWllama();
+
+  await wllama.loadModelFromUrl(TINY_MODEL, {
+    n_ctx: 1024,
+  });
+
+  // concurrent requests must not interfere with each other (issue #261)
+  const prompts = [
+    'Once upon a time',
+    'The little girl said',
+    'One day, a boy named',
+  ];
+  const results = await Promise.all(
+    prompts.map((prompt) =>
+      wllama.createCompletion({
+        prompt,
+        max_tokens: 10,
+        temperature: 0.0,
+        seed: 42,
+      })
+    )
+  );
+
+  expect(results.length).toBe(prompts.length);
+  for (const res of results) {
+    expect(res).toBeDefined();
+    expect(res.choices[0].text.length).toBeGreaterThan(0);
+  }
 
   await wllama.exit();
 });
