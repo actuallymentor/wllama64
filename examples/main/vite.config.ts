@@ -37,7 +37,7 @@ export default { wasm, worker: { code: worker } };
 `;
         } else {
           console.warn(
-            '[wllama-compat] compat WASM not found — falling back to CDN. Run "npm install" inside the compat package to build locally.'
+            '[wllama-compat] compat WASM not found — falling back to CDN. Run "npm install" in examples/main.'
           );
           return `export default 'default';`;
         }

@@ -1,6 +1,33 @@
-# wllama
+# wllama64 development guide
 
-Wllama is a webassembly binding of llama.cpp. It contains the main source code of llama.cpp compiled to wasm (with emscripten), plus a wrapper to provide various convenient APIs, including: downloading and caching models, compatibility, etc.
+`wllama64` is an independent Memory64 fork of
+[Wllama](https://github.com/ngxson/wllama), a WebAssembly binding of llama.cpp.
+It contains llama.cpp compiled to Wasm plus browser APIs for model downloads,
+caching, compatibility, and inference. The package API remains named `Wllama`.
+
+Release `1.0.0-rc.1` is based on upstream Wllama `3.6.0`
+([`f16050d`](https://github.com/ngxson/wllama/commit/f16050d)). The canonical fork
+is [actuallymentor/wllama64](https://github.com/actuallymentor/wllama64).
+
+## Upstream synchronization
+
+Keep the fork delta focused on Memory64 and its required JavaScript, worker,
+cache, build, and test adaptations. Preserve upstream API and behavior changes,
+including its request queue, parallel request support, and partial-download
+recovery.
+
+Configure and fetch the upstream remote with:
+
+```sh
+git remote add upstream https://github.com/ngxson/wllama.git
+git fetch upstream --tags
+```
+
+Integrate tested release commits, not arbitrary development snapshots. After an
+upstream sync, rebuild the default Memory64 and wasm32 compatibility artifacts,
+regenerate worker code and source maps, then run the upstream and Memory64
+browser suites. Syncing never publishes automatically; tag and publish a new
+`wllama64` release only after validation.
 
 ## Project structure
 
@@ -41,9 +68,12 @@ Upon build, `generate_glue_prototype.js` reads `glue.hpp` and generates `glue/me
 
 ### Threading model
 
-Wllama ships a **single wasm build** that supports both single-threaded and multi-threaded execution. The number of threads is determined at runtime rather than at compile time.
+The default Memory64 target ships a **single Wasm artifact** that supports both
+single-threaded and multi-threaded execution. The wasm32 compatibility target is
+a separate fallback artifact. The number of threads is determined at runtime
+rather than at compile time.
 
-At startup, wllama checks whether the browser supports `SharedArrayBuffer` (required for wasm threads). This check validates both the existence of `SharedArrayBuffer` and whether the wasm atomics feature is available (COOP/COEP headers must be set by the server for `SharedArrayBuffer` to be accessible).
+At startup, wllama64 checks whether the browser supports `SharedArrayBuffer` (required for wasm threads). This check validates both the existence of `SharedArrayBuffer` and whether the wasm atomics feature is available (COOP/COEP headers must be set by the server for `SharedArrayBuffer` to be accessible).
 
 The thread pool size is passed to emscripten via `-sPTHREAD_POOL_SIZE=Module["pthreadPoolSize"]`:
 - If the browser **supports** shared memory: `pthreadPoolSize` is set to the desired thread count (defaults to `hardwareConcurrency / 2`)
@@ -71,6 +101,11 @@ The browser maximum is a virtual-address and runtime ceiling, not an allocation
 guarantee. A real model also needs memory for browser overhead, model input,
 temporary buffers, and inference state.
 
+The default artifact expects a 64-bit browser with shared Memory64 and JSPI,
+served with COOP/COEP headers. The release is validated on Chromium 137 or newer.
+Unsupported browsers select the upstream wasm32 compatibility build and remain
+limited to 4 GiB.
+
 ## Startup process
 
 Upon startup, these steps are performed:
@@ -85,7 +120,7 @@ Upon startup, these steps are performed:
 
 Wllama employs some tricks to avoid making copies while reading GGUF files. The runtime uses one of these 2 mechanisms. See `workers-code/llama-cpp.js` for the implementation.
 
-Please note that wllama only accepts `Blob` as input data.
+Please note that wllama64 only accepts `Blob` as input data.
 
 ### Async file read
 
@@ -170,7 +205,6 @@ All integers are little-endian.
 ```
 
 To decode at runtime: base64-decode -> `DecompressionStream('gzip')` -> parse binary. Given a wasm function index `id`, look up `index_array[id - first_func_id]` to get the name table slot.
-%
 ## Debugging backend ops
 
 > [!IMPORTANT]
@@ -181,11 +215,11 @@ Requirements:
 - You have Docker installed and running on your machine
 - On Windows, please use WSL
 
-1. Clone this repo locally: `git clone --recurse-submodules https://github.com/ngxson/wllama.git`
+1. Clone this repo locally: `git clone --recurse-submodules https://github.com/actuallymentor/wllama64.git`
 2. `npm run build:test && npm run build`
 3. `npm run serve` and open http://localhost:8080/examples/test-backend-ops/
 
-Note: A debugging build cannot be merged to `master` or publish to npm
+Note: Do not publish a debugging build to npm.
 
 ## Debugging the C++ glue natively
 

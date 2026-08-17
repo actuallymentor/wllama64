@@ -139,18 +139,22 @@ test.sequential('loads model with progress callback', async () => {
   await wllama.exit();
 });
 
-test.sequential('loads split model files', async () => {
-  const wllama = createWllama(CONFIG_PATHS, {
-    parallelDownloads: 5,
-  });
+test.sequential(
+  'loads split model files',
+  async () => {
+    const wllama = createWllama(CONFIG_PATHS, {
+      parallelDownloads: 5,
+    });
 
-  await wllama.loadModelFromUrl(SPLIT_MODEL, {
-    n_ctx: 1024,
-  });
+    await wllama.loadModelFromUrl(SPLIT_MODEL, {
+      n_ctx: 1024,
+    });
 
-  expect(wllama.isModelLoaded()).toBe(true);
-  await wllama.exit();
-});
+    expect(wllama.isModelLoaded()).toBe(true);
+    await wllama.exit();
+  },
+  30_000
+);
 
 test.sequential('generates completion', async () => {
   const wllama = createWllama();

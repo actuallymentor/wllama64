@@ -99,7 +99,7 @@ export default function Sidebar({ children }: { children: any }) {
               </li>
               <li>
                 <a
-                  href="https://github.com/ngxson/wllama"
+                  href="https://github.com/actuallymentor/wllama64"
                   target="_blank"
                   rel="noopener"
                 >

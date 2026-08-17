@@ -241,7 +241,7 @@ export default function ChatScreen() {
         {!loadedModel && <WarnNoModel />}
 
         <small className="text-center mx-auto opacity-70 pt-2">
-          wllama may generate inaccurate information. Use with your own risk.
+          Wllama64 may generate inaccurate information. Use at your own risk.
         </small>
       </div>
     </ScreenWrapper>

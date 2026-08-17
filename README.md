@@ -1,22 +1,31 @@
-# wllama - Wasm binding for llama.cpp
+# wllama64 — 16 GiB Memory64 fork of Wllama
 
 ![](./README_banner.png)
 
-WebAssembly binding for [llama.cpp](https://github.com/ggerganov/llama.cpp)
+`wllama64` is an independent fork of [Wllama](https://github.com/ngxson/wllama),
+the WebAssembly binding for [llama.cpp](https://github.com/ggerganov/llama.cpp).
+It keeps the upstream browser API while raising the default WebAssembly linear
+memory ceiling from 4 GiB to 16 GiB through Memory64.
 
-👉 [Try the demo app](https://huggingface.co/spaces/ngxson/wllama)
+Current release: `1.0.0-rc.1`, based on upstream Wllama `3.6.0`
+([`f16050d`](https://github.com/ngxson/wllama/commit/f16050d)).
 
-👉 See the [blog post](https://reeselevine.github.io/llamas-on-the-web/) introducing WebGPU support in llama.cpp and wllama
+- [Repository](https://github.com/actuallymentor/wllama64)
+- [Issues](https://github.com/actuallymentor/wllama64/issues)
+- [Releases](https://github.com/actuallymentor/wllama64/releases)
+- [Upstream demo](https://huggingface.co/spaces/ngxson/wllama)
+- [Upstream API documentation](https://github.ngxson.com/wllama/docs/)
+- [WebGPU introduction](https://reeselevine.github.io/llamas-on-the-web/)
 
-📄 [Documentation](https://github.ngxson.com/wllama/docs/)
-
-For changelog, please visit [releases page](https://github.com/ngxson/wllama/releases)
-
-> [!IMPORTANT]
+> [!NOTE]
 >
-> **🔥🔥 V3 is out, with WebGPU, multimodal and tool calling support. Read the [V3 release guide](./guides/intro-v3.md)**
+> This is not an official Wllama release. Report fork-specific problems in the
+> [wllama64 issue tracker](https://github.com/actuallymentor/wllama64/issues).
 >
-> For compatibility issues, please refer to [@wllama/wllama-compat](./compat/README.md)
+> The Memory64 build retains the Wllama V3 API, including WebGPU, multimodal,
+> tool calling, parallel requests, and partial-download recovery. See the
+> [upstream V3 release guide](./guides/intro-v3.md). The wasm32 fallback remains
+> the upstream [@wllama/wllama-compat](./compat/README.md) build.
 
 ![](./assets/screenshot_0.png)
 
@@ -32,37 +41,46 @@ For changelog, please visit [releases page](https://github.com/ngxson/wllama/rel
 - Up to 16 GiB of WebAssembly linear memory on 64-bit Memory64 browsers, with a wasm32 compatibility fallback
 - Auto switch between single-thread and multi-thread build based on browser support
 - Inference is done inside a worker, does not block UI render
-- Pre-built npm package [@wllama/wllama](https://www.npmjs.com/package/@wllama/wllama)
+- Pre-built npm package [wllama64](https://www.npmjs.com/package/wllama64)
 
 Limitations:
-- To enable multi-thread, you must add `Cross-Origin-Embedder-Policy` and `Cross-Origin-Opener-Policy` headers. See [this discussion](https://github.com/ffmpegwasm/ffmpeg.wasm/issues/106#issuecomment-913450724) for more details.
+- The default Memory64 artifact uses shared memory. Serve it with `Cross-Origin-Embedder-Policy` and `Cross-Origin-Opener-Policy` headers. These headers are also required for multi-threading. See [this discussion](https://github.com/ffmpegwasm/ffmpeg.wasm/issues/106#issuecomment-913450724) for more details.
 - The default Memory64 build reads large model files in bounded chunks instead of materializing the full file in an `ArrayBuffer`. Splitting models into 512MB shards is still recommended for compatibility builds and constrained browsers.
-- The 16 GiB Memory64 value is a maximum, not a guarantee that a device can commit that much memory. Wllama grows from 128 MiB and may negotiate a lower maximum during multithreaded startup when the browser cannot reserve 16 GiB. Browsers without shared Memory64 or JSPI support use the wasm32 compat build and remain limited to 4 GiB.
+- The 16 GiB value is a virtual-address ceiling, not a guarantee that a device can commit that much memory. `wllama64` grows from 128 MiB and may negotiate a lower maximum when the browser cannot reserve 16 GiB. Models also need headroom for browser overhead, input, temporary buffers, and inference state.
+- The Memory64 path is validated on 64-bit Chromium 137 or newer. Other browsers require shared Memory64 and JSPI support. Unsupported browsers use the wasm32 compat build and remain limited to 4 GiB.
 
 ## Code demo and documentation
 
-Demo:
-- Basic usages with completions and embeddings: https://github.ngxson.com/wllama/examples/basic/ ([source code](./examples/basic/index.html))
+Fork examples:
+
 - Memory64 model loading and inference stress lab: [source code](./examples/memory64/index.html)
+
+Upstream-hosted examples retained by this fork:
+
+- Basic usages with completions and embeddings: https://github.ngxson.com/wllama/examples/basic/ ([source code](./examples/basic/index.html))
 - Embedding and cosine distance: https://github.ngxson.com/wllama/examples/embeddings/ ([source code](./examples/embeddings/index.html))
 - Multimodal (vision) completion: https://github.ngxson.com/wllama/examples/multimodal/ ([source code](./examples/multimodal/index.html))
 - Tool calling: https://github.ngxson.com/wllama/examples/tools/ ([source code](./examples/tools/index.html))
 
 ## How to use
 
-### Use Wllama inside React Typescript project
+### Use Wllama inside a React TypeScript project
 
 Install it:
 
 ```bash
-npm i @wllama/wllama
+npm install wllama64@1.0.0-rc.1
 ```
 
-Then, import the module:
+Copy `node_modules/wllama64/esm/wasm/wllama.wasm` to your app's public assets,
+then import the module:
 
 ```ts
-import { Wllama } from '@wllama/wllama';
-let wllamaInstance = new Wllama(WLLAMA_CONFIG_PATHS, ...);
+import { Wllama } from 'wllama64';
+
+const wllamaInstance = new Wllama({
+  default: '/wasm/wllama.wasm',
+});
 // (the rest is the same with earlier example)
 ```
 
@@ -131,7 +149,8 @@ import { Wllama } from './esm/index.js';
 Alternatively, you can use the `*.wasm` files from CDN:
 
 ```js
-import WasmFromCDN from '@wllama/wllama/esm/wasm-from-cdn.js';
+import { WasmFromCDN, Wllama } from 'wllama64';
+
 const wllama = new Wllama(WasmFromCDN);
 // NOTE: this is not recommended, only use when you can't embed wasm files in your project
 ```
@@ -170,7 +189,7 @@ When initializing Wllama, you can pass a custom logger to Wllama.
 Example 1: Suppress debug message
 
 ```js
-import { Wllama, LoggerWithoutDebug } from '@wllama/wllama';
+import { LoggerWithoutDebug, Wllama } from 'wllama64';
 
 const wllama = new Wllama(pathConfig, {
   // LoggerWithoutDebug is predefined inside wllama
@@ -191,22 +210,34 @@ const wllama = new Wllama(pathConfig, {
 });
 ```
 
+## Upstream tracking
+
+`wllama64` follows tested upstream Wllama release commits rather than arbitrary
+development snapshots. The current baseline is Wllama `3.6.0` at `f16050d`.
+Conflict resolutions preserve both upstream semantics and Memory64 support.
+
+For each upstream release, maintainers fetch the
+[`ngxson/wllama`](https://github.com/ngxson/wllama) remote, integrate the release
+commit, reapply the narrow Memory64 adaptations, regenerate both Wasm artifacts
+and worker glue, and run the upstream and Memory64 browser suites. Upstream syncs
+do not publish automatically; each becomes an explicit `wllama64` release.
+
 ## How to compile the binary yourself
 
-This repository already come with pre-built binary from llama.cpp source code. However, in some cases you may want to compile it yourself:
+This repository includes a pre-built binary from the llama.cpp source code. However, in some cases you may want to compile it yourself:
 - You don't trust the pre-built one.
 - You want to try out latest - bleeding-edge changes from upstream llama.cpp source code.
 
 You can use the commands below to compile it yourself:
 
 ```shell
-# /!\ IMPORTANT: Require having docker compose installed
+# /!\ IMPORTANT: Requires Docker Compose
 
 # Clone the repository with submodule
-git clone --recurse-submodules https://github.com/ngxson/wllama.git
-cd wllama
+git clone --recurse-submodules https://github.com/actuallymentor/wllama64.git
+cd wllama64
 
-# Optionally, you can run this command to update llama.cpp to latest upstream version (bleeding-edge, use with your own risk!)
+# Optionally, update llama.cpp to its latest upstream version (bleeding-edge, use at your own risk!)
 # git submodule update --remote --merge
 
 # Install the required modules
@@ -221,8 +252,12 @@ npm run build
 ## TODO
 
 - Add support for LoRA adapter
-- Support multi-sequences: knowing the resource limitation when using WASM, I don't think having multi-sequences is a good idea
 
 ## Acknowledgments
 
-Wllama was created and is maintained by [Xuan-Son Nguyen](https://ngxson.com/). The WebGPU backend for llama.cpp is maintained by [Reese Levine](https://reeselevine.github.io/). We thank all other contributors to both wllama and llama.cpp, whose work made this project possible.
+`wllama64` is maintained independently at
+[actuallymentor/wllama64](https://github.com/actuallymentor/wllama64). Wllama was
+created and is maintained by [Xuan-Son Nguyen](https://ngxson.com/). The WebGPU
+backend for llama.cpp is maintained by
+[Reese Levine](https://reeselevine.github.io/). We thank all contributors to
+Wllama and llama.cpp, whose work made this fork possible.

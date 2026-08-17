@@ -5,7 +5,7 @@ import {
   useDidMount,
   WllamaStorage,
 } from './utils';
-import { Model, ModelManager, Wllama } from '@wllama/wllama';
+import { Model, ModelManager, Wllama } from 'wllama64';
 import {
   DEFAULT_INFERENCE_PARAMS,
   WLLAMA_COMPAT_CONFIG,

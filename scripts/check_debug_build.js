@@ -18,7 +18,7 @@ export function checkDebugBuild() {
     if (!existsSync(absPath)) continue;
     const contents = readFileSync(absPath);
     if (contents.includes(DEBUG_MARKER)) {
-      console.error(`ERROR: ${relPath} contains "${DEBUG_MARKER}" - this is a debug build and cannot be merged to master or be published`);
+      console.error(`ERROR: ${relPath} contains "${DEBUG_MARKER}" - this is a debug build and cannot be merged to main or be published`);
       process.exit(1);
     }
   }

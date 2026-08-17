@@ -1,4 +1,4 @@
-# wllama main example
+# Wllama64 main example
 
 TODO:
 - Load local gguf

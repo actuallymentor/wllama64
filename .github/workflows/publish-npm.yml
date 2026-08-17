@@ -1,0 +1,162 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact package.json version to publish
+        required: true
+        type: string
+      dist_tag:
+        description: npm distribution tag
+        required: true
+        default: next
+        type: choice
+        options:
+          - next
+          - latest
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, verify, and publish
+    if: github.event_name == 'workflow_dispatch' && github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: npm-publish
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Require main and the requested package version
+        env:
+          DIST_TAG: ${{ inputs.dist_tag }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Publishing is only allowed from main; got $GITHUB_REF" >&2
+            exit 1
+          fi
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const distTag = process.env.DIST_TAG;
+          const expectedName = 'wllama64';
+          const requestedVersion = process.env.REQUESTED_VERSION;
+
+          if (packageJson.name !== expectedName) {
+            throw new Error(
+              `Refusing to publish ${packageJson.name}; expected ${expectedName}`
+            );
+          }
+
+          if (packageJson.version !== requestedVersion) {
+            throw new Error(
+              `Requested ${requestedVersion}, but package.json contains ${packageJson.version}`
+            );
+          }
+
+          if (distTag === 'latest' && requestedVersion.includes('-')) {
+            throw new Error('Refusing to publish a prerelease version as latest');
+          }
+          NODE
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+
+      - name: Update npm for trusted publishing
+        run: npm install --global npm@11.17.0
+
+      - name: Require an unpublished version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if npm view "wllama64@$REQUESTED_VERSION" version >/dev/null 2>&1; then
+            echo "wllama64@$REQUESTED_VERSION is already published" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Rebuild WebAssembly
+        run: npm run build:wasm
+
+      - name: Build package
+        run: npm run build
+
+      - name: Verify generated artifacts are committed
+        run: git diff --exit-code
+
+      - name: Test Chromium
+        run: npm run test:auto
+
+      - name: Test Firefox
+        run: npm run test:firefox
+
+      - name: Test Memory64 boundary
+        run: npm run test:memory64
+
+      - name: Test wasm32 compatibility
+        run: npm run test:compat
+
+      - name: Test Memory64 stress helpers
+        run: npm run test:memory64:stress:unit
+
+      - name: Run release checks
+        run: npm run release:check
+
+      - name: Pack and inspect publish artifact
+        id: pack
+        run: |
+          npm pack --json > pack-result.json
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const [pack] = JSON.parse(fs.readFileSync('pack-result.json', 'utf8'));
+          const paths = new Set(pack.files.map(({ path }) => path));
+          const required = [
+            'package.json',
+            'esm/index.cjs',
+            'esm/index.d.ts',
+            'esm/index.js',
+            'esm/index.min.js',
+            'esm/wasm/wllama.wasm',
+          ];
+
+          for (const path of required) {
+            if (!paths.has(path)) throw new Error(`Packed artifact is missing ${path}`);
+          }
+
+          if ([...paths].some((path) => path.startsWith('compat/'))) {
+            throw new Error('Root package unexpectedly contains the compat package');
+          }
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tarball=${pack.filename}\n`);
+          NODE
+
+      - name: Publish root package
+        env:
+          DIST_TAG: ${{ inputs.dist_tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: npm publish "$TARBALL" --access public --provenance --tag "$DIST_TAG"

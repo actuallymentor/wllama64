@@ -12,7 +12,7 @@ import { toHumanReadableSize, useDebounce } from '../utils/utils';
 import { useEffect, useState } from 'react';
 import ScreenWrapper from './ScreenWrapper';
 import { DisplayedModel } from '../utils/displayed-model';
-import { isValidGgufFile } from '@wllama/wllama';
+import { isValidGgufFile } from 'wllama64';
 
 export default function ModelScreen() {
   const [showAddCustom, setShowAddCustom] = useState(false);
@@ -231,7 +231,7 @@ function AddCustomModelDialog({ onClose }: { onClose(): void }) {
         <div className="mt-4">
           Max GGUF file size is 2GB. If your model is bigger than 2GB, please{' '}
           <a
-            href="https://github.com/ngxson/wllama?tab=readme-ov-file#split-model"
+            href="https://github.com/actuallymentor/wllama64?tab=readme-ov-file#split-model"
             target="_blank"
             rel="noopener"
             className="text-primary"

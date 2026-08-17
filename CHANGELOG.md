@@ -1,12 +1,19 @@
 # Changelog
 
-## [3.6.0] - 2026-08-17
+## [1.0.0-rc.1] - 2026-08-17
 
 ### Added
 
-- Integrate upstream Wllama 3.6.0, including parallel request handling and partial-download recovery.
+- Publish `wllama64` as an independent Memory64 fork of Wllama.
 - Raise the default Memory64 ceiling to 16 GiB with wasm32 fallback. (dea6519)
 - Add real-browser Memory64 stress coverage and demo. (2468371)
+- Export `WasmFromCDN` from the package root for zero-config startup.
+
+### Changed
+
+- Base the fork on upstream Wllama 3.6.0 at [`f16050d`](https://github.com/ngxson/wllama/commit/f16050d), retaining parallel request handling and partial-download recovery.
+- Pin the wasm32 compatibility fallback to upstream `@wllama/wllama-compat` 3.6.0 rather than publishing a forked compat package.
+- Point package, repository, issue, and release documentation to [actuallymentor/wllama64](https://github.com/actuallymentor/wllama64).
 
 ### Fixed
 

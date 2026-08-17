@@ -8,10 +8,10 @@ export default function GuideScreen() {
   return (
     <ScreenWrapper>
       <div className="guide-text pt-16">
-        <h1 className="text-2xl font-bold mb-4">Wllama 🦙</h1>
+        <h1 className="text-2xl font-bold mb-4">Wllama64 🦙</h1>
 
         <div className="mb-3">
-          Wllama is a project based on{' '}
+          Wllama64 is a Memory64 fork of Wllama, based on{' '}
           <a
             href="https://github.com/ggerganov/llama.cpp"
             target="_blank"
@@ -35,7 +35,7 @@ export default function GuideScreen() {
               Due to memory constraint of WebAssembly and emscripten, models
               larger than 2GB will need to be split.{' '}
               <a
-                href="https://github.com/ngxson/wllama?tab=readme-ov-file#split-model"
+                href="https://github.com/actuallymentor/wllama64?tab=readme-ov-file#split-model"
                 target="_blank"
                 rel="noopener"
               >
@@ -67,10 +67,10 @@ export default function GuideScreen() {
         <h1 className="text-xl font-bold mb-4 mt-6">Reporting bugs</h1>
 
         <div className="mb-3">
-          Wllama is in development and many bugs are expected to happen. If you
-          find a bug, please{' '}
+          Wllama64 is in development and bugs may occur. If you find a bug,
+          please{' '}
           <a
-            href="https://github.com/ngxson/wllama/issues"
+            href="https://github.com/actuallymentor/wllama64/issues"
             target="_blank"
             rel="noopener"
           >

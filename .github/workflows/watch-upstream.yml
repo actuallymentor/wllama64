@@ -1,0 +1,133 @@
+name: Watch upstream releases
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-release-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Open upstream sync PR or issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # A fine-grained PAT allows the resulting PR to trigger normal CI. The
+      # repository token remains a functional fallback, but GitHub suppresses
+      # recursive workflow events created with that token.
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+      UPSTREAM_REPOSITORY: ngxson/wllama
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+          submodules: false
+
+      - name: Find and integrate the latest stable upstream tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --force upstream '+refs/tags/*:refs/tags/upstream/*'
+
+          mapfile -t upstream_tags < <(
+            git for-each-ref \
+              --format='%(refname:strip=3)' \
+              refs/tags/upstream \
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V
+          )
+
+          if (( ${#upstream_tags[@]} == 0 )); then
+            echo 'No stable upstream release tags found' >&2
+            exit 1
+          fi
+
+          latest_tag="${upstream_tags[-1]}"
+          current_tag=''
+
+          for tag in "${upstream_tags[@]}"; do
+            if git merge-base --is-ancestor "refs/tags/upstream/$tag" HEAD; then
+              current_tag="$tag"
+            fi
+          done
+
+          if [[ "$current_tag" == "$latest_tag" ]]; then
+            echo "Already based on the latest upstream release: $latest_tag"
+            exit 0
+          fi
+
+          branch="sync/upstream-$latest_tag"
+          title="Sync upstream wllama $latest_tag"
+
+          gh auth setup-git
+
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            existing_pr=$(gh pr list \
+              --state all \
+              --head "$branch" \
+              --json url \
+              --jq '.[0].url // empty')
+
+            if [[ -n "$existing_pr" ]]; then
+              echo "Sync already exists: $existing_pr"
+              exit 0
+            fi
+
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "$title" \
+              --body "Automated sync candidate for upstream release [$latest_tag](https://github.com/${UPSTREAM_REPOSITORY}/releases/tag/$latest_tag). This workflow never publishes packages. Rebuild and CI gates must pass before merge."
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch --create "$branch"
+
+          if git merge --no-edit --no-ff "refs/tags/upstream/$latest_tag"; then
+            git push --set-upstream origin "$branch"
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "$title" \
+              --body "Automated conflict-free merge of upstream release [$latest_tag](https://github.com/${UPSTREAM_REPOSITORY}/releases/tag/$latest_tag). This workflow never publishes packages. Rebuild and CI gates must pass before merge."
+            exit 0
+          fi
+
+          conflicts=$(git diff --name-only --diff-filter=U)
+          git merge --abort
+
+          issue_title="Upstream sync needs manual resolution: $latest_tag"
+          existing_issue=$(TITLE="$issue_title" gh issue list \
+            --state open \
+            --limit 100 \
+            --json title,url \
+            --jq '.[] | select(.title == env.TITLE) | .url' \
+            | head -n 1)
+
+          if [[ -n "$existing_issue" ]]; then
+            echo "Conflict issue already exists: $existing_issue"
+            exit 0
+          fi
+
+          body=$(printf "%s\n\n%s\n\nConflicting paths:\n%s" \
+            "Upstream release [$latest_tag](https://github.com/${UPSTREAM_REPOSITORY}/releases/tag/$latest_tag) cannot be merged into main automatically." \
+            "Current detected upstream base: ${current_tag:-unknown}. Resolve the files below, rebuild every generated Wasm artifact, and run the release gates. This watcher never publishes packages." \
+            "$conflicts")
+
+          gh issue create --title "$issue_title" --body "$body"

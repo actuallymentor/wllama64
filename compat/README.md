@@ -1,10 +1,17 @@
 # @wllama/wllama-compat
 
-Optional package that provides compatibility WASM assets for `@wllama/wllama` on browsers that lack [JSPI](https://github.com/WebAssembly/js-promise-integration) or [MEMORY64](https://github.com/WebAssembly/memory64) support - most notably Safari and older browsers.
+Official upstream package that provides wasm32 compatibility assets for
+`wllama64` on browsers that lack
+[JSPI](https://github.com/WebAssembly/js-promise-integration) or
+[Memory64](https://github.com/WebAssembly/memory64) support—most notably Safari
+and older browsers. `wllama64` pins these assets to upstream version `3.6.0`; it
+does not publish a separate compat package.
 
 ## Why this package exists
 
-The default `@wllama/wllama` build relies on two modern WebAssembly features: [JSPI](https://github.com/WebAssembly/js-promise-integration) and [MEMORY64](https://github.com/WebAssembly/memory64)
+The default `wllama64` build relies on two modern WebAssembly features:
+[JSPI](https://github.com/WebAssembly/js-promise-integration) and
+[Memory64](https://github.com/WebAssembly/memory64).
 
 When either feature is absent, wllama automatically falls back to **compat mode**: a separate WASM build that uses [Asyncify](https://emscripten.org/docs/porting/asyncify.html) instead of JSPI, and drops MEMORY64.
 
@@ -54,13 +61,13 @@ wllama.setCompat(null);
 **You only need to install package if you want to store compat assets locally**. By default, assets are pulled from CDN.
 
 ```bash
-npm install @wllama/wllama-compat
+npm install @wllama/wllama-compat@3.6.0
 ```
 
 Then copy the assets from `node_modules/@wllama/wllama-compat/wasm/` to your public directory and call `setCompat()` with the URLs pointing to those files:
 
 ```ts
-import { Wllama } from '@wllama/wllama';
+import { Wllama } from 'wllama64';
 
 const wllama = new Wllama({ default: '/wasm/wllama.wasm' });
 

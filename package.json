@@ -1,9 +1,29 @@
 {
-  "name": "@wllama/wllama",
-  "version": "3.6.0",
-  "description": "WebAssembly binding for llama.cpp - Enabling on-browser LLM inference",
-  "main": "index.js",
+  "name": "wllama64",
+  "version": "1.0.0-rc.1",
+  "description": "Memory64 WebAssembly binding for llama.cpp - Enabling on-browser LLM inference",
+  "main": "./esm/index.cjs",
+  "module": "./esm/index.js",
+  "types": "./esm/index.d.ts",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./esm/index.d.ts",
+      "import": "./esm/index.js",
+      "require": "./esm/index.cjs",
+      "default": "./esm/index.js"
+    },
+    "./wasm/wllama.wasm": "./esm/wasm/wllama.wasm",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "esm",
+    "assets",
+    "CHANGELOG.md",
+    "LICENCE",
+    "README.md",
+    "README_banner.png"
+  ],
   "directories": {
     "example": "examples"
   },
@@ -20,11 +40,14 @@
     "build:typedef": "tsc --emitDeclarationOnly --declaration -p tsconfig.build.json",
     "build": "npm run clean && npm run build:worker && npm run build:tsup && npm run build:minified && npm run build:typedef && ./scripts/post_build.sh && npm run docs",
     "docs": "typedoc --tsconfig tsconfig.build.json src/index.ts",
-    "upload": "npm run format && npm run build && node scripts/check_package_size.js && npm publish --access public && (cd compat && npm publish --access public)",
     "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:wasm": "node scripts/check_wasm_memory.mjs",
+    "check:package": "node scripts/check_package_size.js && node scripts/check_package_exports.mjs",
+    "release:check": "npm run build && npm run format:check && npm run check:wasm && npm run check:package",
     "test": "vitest",
     "test:auto": "AUTO=1 vitest",
-    "test:firefox": "BROWSER=firefox vitest",
+    "test:firefox": "AUTO=1 BROWSER=firefox vitest",
     "test:safari": "BROWSER=safari vitest",
     "test:wgpu": "WEBGPU=1 vitest",
     "test:memory64": "AUTO=1 vitest src/memory64.test.ts",
@@ -37,7 +60,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ngxson/wllama.git"
+    "url": "git+https://github.com/actuallymentor/wllama64.git"
+  },
+  "wllama64": {
+    "upstreamPackage": "@wllama/wllama",
+    "upstreamVersion": "3.6.0",
+    "upstreamCommit": "f16050d8d51a00602c6a2a6b8ac9c09f490eea7f",
+    "upstreamRepository": "https://github.com/ngxson/wllama",
+    "compatPackage": "@wllama/wllama-compat",
+    "compatVersion": "3.6.0"
   },
   "keywords": [
     "wasm",
@@ -52,9 +83,9 @@
   "author": "Xuan Son NGUYEN <contact@ngxson.com>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/ngxson/wllama/issues"
+    "url": "https://github.com/actuallymentor/wllama64/issues"
   },
-  "homepage": "https://github.com/ngxson/wllama#readme",
+  "homepage": "https://github.com/actuallymentor/wllama64#readme",
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "@vitest/browser": "^2.1.6",
