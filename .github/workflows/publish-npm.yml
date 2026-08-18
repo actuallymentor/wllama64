@@ -1,7 +1,13 @@
 name: Publish npm package
-run-name: Publish wllama64@${{ inputs.version }} to npm (${{ inputs.dist_tag }})
+run-name: Publish wllama64 from ${{ github.ref_name }}
 
 on:
+  push:
+    branches:
+      - main
+  schedule:
+    # Retry registry, compatibility-package, or runner failures autonomously.
+    - cron: '47 7 * * *'
   workflow_dispatch:
     inputs:
       version:
@@ -19,127 +25,319 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: npm-publish
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Build, verify, and publish
-    if: github.event_name == 'workflow_dispatch' && github.ref_name == 'main'
+  inspect:
+    name: Inspect release
+    if: github.ref_name == 'main'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    environment: npm-publish
+    timeout-minutes: 10
+    outputs:
+      dist_tag: ${{ steps.metadata.outputs.dist_tag }}
+      release_commit: ${{ steps.registry.outputs.release_commit }}
+      should_publish: ${{ steps.registry.outputs.should_publish }}
+      version: ${{ steps.metadata.outputs.version }}
 
     steps:
-      - name: Checkout main
+      - name: Checkout exact main commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: recursive
-
-      - name: Require main and the requested package version
-        env:
-          DIST_TAG: ${{ inputs.dist_tag }}
-          REQUESTED_VERSION: ${{ inputs.version }}
-        run: |
-          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Publishing is only allowed from main; got $GITHUB_REF" >&2
-            exit 1
-          fi
-
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-
-          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          const distTag = process.env.DIST_TAG;
-          const expectedName = 'wllama64';
-          const requestedVersion = process.env.REQUESTED_VERSION;
-
-          if (packageJson.name !== expectedName) {
-            throw new Error(
-              `Refusing to publish ${packageJson.name}; expected ${expectedName}`
-            );
-          }
-
-          if (packageJson.version !== requestedVersion) {
-            throw new Error(
-              `Requested ${requestedVersion}, but package.json contains ${packageJson.version}`
-            );
-          }
-
-          if (distTag === 'latest' && requestedVersion.includes('-')) {
-            throw new Error('Refusing to publish a prerelease version as latest');
-          }
-          NODE
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          submodules: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          registry-url: https://registry.npmjs.org
 
-      - name: Update npm for trusted publishing
-        run: npm install --global npm@11.17.0
-
-      - name: Require an unpublished version
+      - name: Validate release metadata
+        id: metadata
         env:
+          REQUESTED_DIST_TAG: ${{ inputs.dist_tag }}
           REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          if npm view "wllama64@$REQUESTED_VERSION" version >/dev/null 2>&1; then
-            echo "wllama64@$REQUESTED_VERSION is already published" >&2
+          set -euo pipefail
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const requestedVersion = process.env.REQUESTED_VERSION || packageJson.version;
+          const distTag =
+            process.env.REQUESTED_DIST_TAG ||
+            (packageJson.version.includes('-') ? 'next' : 'latest');
+
+          if (packageJson.name !== 'wllama64') {
+            throw new Error(`Refusing to publish unexpected package ${packageJson.name}`);
+          }
+          if (packageJson.version !== requestedVersion) {
+            throw new Error(
+              `Requested ${requestedVersion}, package.json contains ${packageJson.version}`
+            );
+          }
+          if (!['latest', 'next'].includes(distTag)) {
+            throw new Error(`Unsupported npm dist-tag: ${distTag}`);
+          }
+          if (distTag === 'latest' && requestedVersion.includes('-')) {
+            throw new Error('Refusing to publish a prerelease as latest');
+          }
+          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(requestedVersion)) {
+            throw new Error(`Invalid package version: ${requestedVersion}`);
+          }
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${requestedVersion}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${distTag}\n`);
+          NODE
+
+          upstream_version=$(node -p "require('./package.json').wllama64.upstreamVersion")
+          expected_commit=$(node -p "require('./package.json').wllama64.upstreamCommit")
+          git remote add upstream https://github.com/ngxson/wllama.git
+          git fetch --force upstream \
+            "refs/tags/$upstream_version:refs/tags/verified-upstream-$upstream_version"
+          detected_commit=$(git rev-parse "refs/tags/verified-upstream-$upstream_version^{commit}")
+
+          if [[ "$detected_commit" != "$expected_commit" ]]; then
+            echo "Upstream tag $upstream_version moved or metadata is stale" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$expected_commit" HEAD; then
+            echo "Published tree does not contain upstream $expected_commit" >&2
             exit 1
           fi
 
-      - name: Install dependencies
-        run: npm ci --include=dev
+      - name: Check npm registry without failing open
+        id: registry
+        env:
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import packageJson from './package.json' with { type: 'json' };
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium firefox
+          const registryStatus = async (name, version) => {
+            const response = await fetch(
+              `https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(version)}`,
+              {
+                headers: { 'user-agent': 'wllama64-release-check' },
+                signal: AbortSignal.timeout(15_000),
+              }
+            );
 
-      - name: Rebuild WebAssembly
-        run: npm run build:wasm
+            if (response.status !== 200 && response.status !== 404) {
+              throw new Error(
+                `npm registry returned ${response.status} for ${name}@${version}`
+              );
+            }
+            return {
+              metadata: response.status === 200 ? await response.json() : null,
+              status: response.status,
+            };
+          };
 
-      - name: Verify rebuilt Wasm declarations
-        run: npm run check:wasm
+          const packageResult = await registryStatus(
+            packageJson.name,
+            process.env.RELEASE_VERSION
+          );
+          const compatResult = await registryStatus(
+            packageJson.wllama64.compatPackage,
+            packageJson.wllama64.compatVersion
+          );
 
-      - name: Build package
-        run: npm run build
+          if (compatResult.status !== 200) {
+            throw new Error(
+              `Missing compatibility package ${packageJson.wllama64.compatPackage}@${packageJson.wllama64.compatVersion}`
+            );
+          }
 
-      - name: Preserve clean Wasm build
-        uses: actions/upload-artifact@v4
+          const shouldPublish = packageResult.status === 404;
+          let releaseCommit = process.env.GITHUB_SHA;
+          if (!shouldPublish) {
+            const response = await fetch(
+              `https://registry.npmjs.org/-/npm/v1/attestations/${encodeURIComponent(packageJson.name)}@${encodeURIComponent(process.env.RELEASE_VERSION)}`,
+              {
+                headers: { 'user-agent': 'wllama64-release-check' },
+                signal: AbortSignal.timeout(15_000),
+              }
+            );
+            if (!response.ok) {
+              throw new Error(`npm attestations returned ${response.status}`);
+            }
+
+            const { attestations } = await response.json();
+            const provenance = attestations.find(
+              ({ predicateType }) => predicateType === 'https://slsa.dev/provenance/v1'
+            );
+            if (!provenance) throw new Error('Published package lacks npm provenance');
+
+            const payload = JSON.parse(
+              Buffer.from(provenance.bundle.dsseEnvelope.payload, 'base64').toString()
+            );
+            const expectedSubject =
+              `pkg:npm/${packageJson.name}@${process.env.RELEASE_VERSION}`;
+            const packageSubject = payload.subject?.find(
+              ({ name }) => name === expectedSubject
+            );
+            const integrity = packageResult.metadata?.dist?.integrity;
+            const expectedDigest = integrity?.startsWith('sha512-')
+              ? Buffer.from(integrity.slice('sha512-'.length), 'base64').toString('hex')
+              : null;
+            const workflow = payload.predicate?.buildDefinition?.externalParameters?.workflow;
+            const dependencies =
+              payload.predicate?.buildDefinition?.resolvedDependencies ?? [];
+            const source = dependencies.find(({ uri }) =>
+              uri?.startsWith(`git+https://github.com/${process.env.GITHUB_REPOSITORY}@`)
+            );
+            releaseCommit = source?.digest?.gitCommit;
+
+            if (
+              workflow?.repository !==
+                `https://github.com/${process.env.GITHUB_REPOSITORY}` ||
+              workflow?.path !== '.github/workflows/publish-npm.yml' ||
+              workflow?.ref !== 'refs/heads/main' ||
+              packageSubject?.digest?.sha512 !== expectedDigest ||
+              !/^[0-9a-f]{40}$/.test(releaseCommit ?? '')
+            ) {
+              throw new Error('Published package provenance does not match this workflow');
+            }
+          }
+
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `should_publish=${shouldPublish}\n`
+          );
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `release_commit=${releaseCommit}\n`
+          );
+          if (!shouldPublish) {
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              `recovery_tarball=${packageResult.metadata.dist.tarball}\n`
+            );
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              `recovery_digest=${packageSubject.digest.sha512}\n`
+            );
+          }
+          console.log(
+            shouldPublish
+              ? `${packageJson.name}@${process.env.RELEASE_VERSION} is available`
+              : `${packageJson.name}@${process.env.RELEASE_VERSION} is already published`
+          );
+          NODE
+
+      - name: Validate an existing recovery tarball
+        if: steps.registry.outputs.should_publish == 'false'
+        env:
+          RECOVERY_TARBALL: ${{ steps.registry.outputs.recovery_tarball }}
+          RECOVERY_DIGEST: ${{ steps.registry.outputs.recovery_digest }}
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          curl --fail --location --silent --show-error \
+            "$RECOVERY_TARBALL" \
+            --output "$RUNNER_TEMP/recovery.tgz"
+          actual_digest=$(sha512sum "$RUNNER_TEMP/recovery.tgz" | cut -d ' ' -f 1)
+          if [[ "$actual_digest" != "$RECOVERY_DIGEST" ]]; then
+            echo 'Recovery tarball does not match npm provenance' >&2
+            exit 1
+          fi
+          package_manifest=$(tar -xOf "$RUNNER_TEMP/recovery.tgz" package/package.json)
+          PACKAGE_MANIFEST="$package_manifest" node --input-type=module <<'NODE'
+          const packageJson = JSON.parse(process.env.PACKAGE_MANIFEST);
+          const allowed = new Set([
+            'author', 'bugs', 'dependencies', 'description', 'devDependencies',
+            'directories', 'exports', 'files', 'funding', 'homepage', 'keywords',
+            'license', 'main', 'module', 'name', 'optionalDependencies',
+            'peerDependencies', 'peerDependenciesMeta', 'prettier', 'repository',
+            'scripts', 'sideEffects', 'type', 'types', 'version', 'wllama64',
+          ]);
+          const lifecycle = new Set([
+            'dependencies', 'install', 'postinstall', 'postpack', 'postprepare',
+            'postpublish', 'postuninstall', 'preinstall', 'prepack', 'preprepare',
+            'prepare', 'prepublish', 'prepublishOnly', 'preuninstall', 'publish',
+            'uninstall',
+          ]);
+          const unexpected = Object.keys(packageJson).filter((key) => !allowed.has(key));
+          const unsafeScripts = Object.keys(packageJson.scripts ?? {}).filter((key) =>
+            lifecycle.has(key)
+          );
+          const directoryKeys = Object.keys(packageJson.directories ?? {});
+          if (packageJson.name !== 'wllama64' || packageJson.version !== process.env.RELEASE_VERSION) {
+            throw new Error('Recovery tarball identity does not match the release');
+          }
+          if (unexpected.length > 0 || unsafeScripts.length > 0) {
+            throw new Error('Recovery tarball contains unsafe package metadata');
+          }
+          if (
+            directoryKeys.some((key) => key !== 'example') ||
+            (Object.hasOwn(packageJson.directories ?? {}, 'example') &&
+              packageJson.directories.example !== 'examples')
+          ) {
+            throw new Error('Recovery tarball contains unsafe package directories');
+          }
+          NODE
+
+  build:
+    name: Build and test release artifact
+    needs: inspect
+    if: needs.inspect.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v4
         with:
-          name: wllama64-wasm-${{ github.sha }}-${{ github.run_attempt }}
-          path: src/wasm/wllama.wasm
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies and browsers
+        run: |
+          npm ci --include=dev
+          npx playwright install --with-deps chromium firefox
+
+      - name: Rebuild and verify both WebAssembly targets
+        run: |
+          npm run build:wasm
+          npm run check:wasm
+          npm run build
 
       - name: Verify deterministic generated artifacts are committed
         run: |
-          # Fresh Emscripten builds can encode equivalent exception regions differently.
-          # The rebuilt Wasm is validated above and exercised by every test below.
+          # Equivalent Emscripten exception regions can differ byte-for-byte.
+          # Validate and execute fresh Wasm, but compare every deterministic file.
           git diff --exit-code -- . ':(exclude)src/wasm/wllama.wasm'
 
-      - name: Test Chromium
-        run: npm run test:auto
-
-      - name: Test Firefox
-        run: npm run test:firefox
-
-      - name: Test Memory64 boundary
-        run: npm run test:memory64
-
-      - name: Test wasm32 compatibility
-        run: npm run test:compat
-
-      - name: Test Memory64 stress helpers
-        run: npm run test:memory64:stress:unit
-
-      - name: Run release checks
+      - name: Run release suites
         run: |
+          node scripts/check_debug_build.js
+          npm run check:release-automation
+          npm run test:auto
+          npm run test:firefox
+          npm run test:memory64
+          npm run test:compat
+          npm run test:memory64:stress:unit
           npm run format:check
           npm run check:wasm
           npm run check:package
@@ -150,7 +348,7 @@ jobs:
       - name: Pack and inspect publish artifact
         id: pack
         run: |
-          npm pack --json > pack-result.json
+          npm pack --ignore-scripts --json > pack-result.json
 
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -169,7 +367,6 @@ jobs:
           for (const path of required) {
             if (!paths.has(path)) throw new Error(`Packed artifact is missing ${path}`);
           }
-
           if ([...paths].some((path) => path.startsWith('compat/'))) {
             throw new Error('Root package unexpectedly contains the compat package');
           }
@@ -177,8 +374,239 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `tarball=${pack.filename}\n`);
           NODE
 
-      - name: Publish root package
+      - name: Upload exact npm tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package-${{ needs.inspect.outputs.version }}-${{ github.run_attempt }}
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish exact tarball with npm OIDC
+    needs:
+      - inspect
+      - build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Setup Node.js for npm trusted publishing
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Update npm for trusted publishing
+        run: npm install --global npm@11.17.0
+
+      - name: Download exact tested tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-package-${{ needs.inspect.outputs.version }}-${{ github.run_attempt }}
+          path: release-artifact
+
+      - name: Inspect and publish without lifecycle scripts
         env:
-          DIST_TAG: ${{ inputs.dist_tag }}
-          TARBALL: ${{ steps.pack.outputs.tarball }}
-        run: npm publish "$TARBALL" --access public --provenance --tag "$DIST_TAG"
+          DIST_TAG: ${{ needs.inspect.outputs.dist_tag }}
+          RELEASE_VERSION: ${{ needs.inspect.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t tarballs < <(find release-artifact -maxdepth 1 -type f -name '*.tgz')
+          if (( ${#tarballs[@]} != 1 )); then
+            echo "Expected exactly one tarball, found ${#tarballs[@]}" >&2
+            exit 1
+          fi
+
+          tarball="${tarballs[0]}"
+          package_name=$(tar -xOf "$tarball" package/package.json | node -p \
+            "JSON.parse(require('fs').readFileSync(0, 'utf8')).name")
+          package_version=$(tar -xOf "$tarball" package/package.json | node -p \
+            "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")
+          if [[ "$package_name" != 'wllama64' || "$package_version" != "$RELEASE_VERSION" ]]; then
+            echo "Unexpected tarball identity: $package_name@$package_version" >&2
+            exit 1
+          fi
+
+          package_manifest=$(tar -xOf "$tarball" package/package.json)
+          PACKAGE_MANIFEST="$package_manifest" node --input-type=module <<'NODE'
+          const packageJson = JSON.parse(process.env.PACKAGE_MANIFEST);
+          const allowed = new Set([
+            'author',
+            'bugs',
+            'dependencies',
+            'description',
+            'devDependencies',
+            'directories',
+            'exports',
+            'files',
+            'funding',
+            'homepage',
+            'keywords',
+            'license',
+            'main',
+            'module',
+            'name',
+            'optionalDependencies',
+            'peerDependencies',
+            'peerDependenciesMeta',
+            'prettier',
+            'repository',
+            'scripts',
+            'sideEffects',
+            'type',
+            'types',
+            'version',
+            'wllama64',
+          ]);
+          const unexpected = Object.keys(packageJson).filter((key) => !allowed.has(key));
+          const lifecycle = new Set([
+            'dependencies', 'install', 'postinstall', 'postpack', 'postprepare',
+            'postpublish', 'postuninstall', 'preinstall', 'prepack', 'preprepare',
+            'prepare', 'prepublish', 'prepublishOnly', 'preuninstall', 'publish',
+            'uninstall',
+          ]);
+          const unsafeScripts = Object.keys(packageJson.scripts ?? {}).filter((key) =>
+            lifecycle.has(key)
+          );
+          const directoryKeys = Object.keys(packageJson.directories ?? {});
+          if (unexpected.length > 0 || unsafeScripts.length > 0) {
+            throw new Error('Refusing unsafe package metadata');
+          }
+          if (
+            directoryKeys.some((key) => key !== 'example') ||
+            (Object.hasOwn(packageJson.directories ?? {}, 'example') &&
+              packageJson.directories.example !== 'examples')
+          ) {
+            throw new Error('Refusing unsafe package directories');
+          }
+          NODE
+
+          npm publish "$tarball" \
+            --ignore-scripts \
+            --access public \
+            --provenance \
+            --tag "$DIST_TAG"
+
+  release:
+    name: Create git tag and GitHub release
+    needs:
+      - inspect
+      - publish
+    if: >-
+      ${{
+        always() &&
+        needs.inspect.result == 'success' &&
+        (needs.publish.result == 'success' ||
+          (needs.inspect.outputs.should_publish == 'false' &&
+            needs.publish.result == 'skipped'))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Create or verify release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.inspect.outputs.release_commit }}
+          RELEASE_VERSION: ${{ needs.inspect.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="v$RELEASE_VERSION"
+          git fetch --force origin '+refs/tags/*:refs/tags/*'
+
+          if ! git cat-file -e "$RELEASE_COMMIT^{commit}"; then
+            echo "Release commit does not exist: $RELEASE_COMMIT" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
+            echo "Release commit is not part of main: $RELEASE_COMMIT" >&2
+            exit 1
+          fi
+
+          if git rev-parse --verify --quiet "refs/tags/$tag^{commit}" >/dev/null; then
+            tagged_commit=$(git rev-parse "refs/tags/$tag^{commit}")
+            if [[ "$tagged_commit" != "$RELEASE_COMMIT" ]]; then
+              echo "$tag points to $tagged_commit, expected $RELEASE_COMMIT" >&2
+              exit 1
+            fi
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag --annotate "$tag" "$RELEASE_COMMIT" \
+              --message "wllama64 $RELEASE_VERSION"
+            git push origin "refs/tags/$tag"
+          fi
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists: $tag"
+            exit 0
+          fi
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "wllama64 $RELEASE_VERSION" \
+            --generate-notes \
+            --verify-tag
+
+  report-failure:
+    name: Report release failure
+    needs:
+      - inspect
+      - build
+      - publish
+      - release
+    if: >-
+      ${{
+        always() &&
+        (needs.inspect.result == 'failure' ||
+          needs.build.result == 'failure' ||
+          needs.publish.result == 'failure' ||
+          needs.release.result == 'failure')
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Open deduplicated release issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          title='Automatic npm release failed'
+          existing=$(TITLE="$title" gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --limit 100 \
+            --json title,url \
+            --jq '.[] | select(.title == env.TITLE) | .url' \
+            | head -n 1)
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" \
+              --repo "$GITHUB_REPOSITORY" \
+              --body "Retry failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            exit 0
+          fi
+
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$title" \
+            --body "Automatic publish stopped safely. Inspect $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The workflow retries daily; npm OIDC remains isolated from build code."

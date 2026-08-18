@@ -1,31 +1,38 @@
 name: Watch upstream releases
-run-name: Check for upstream Wllama releases
+run-name: Check for stable upstream Wllama releases
 
 on:
   schedule:
     - cron: '17 6 * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Verify access and report the next release without changing GitHub
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: upstream-release-sync
   cancel-in-progress: false
 
 jobs:
-  sync:
-    name: Open upstream sync PR or issue
+  prepare:
+    name: Prepare upstream sync
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      # A fine-grained PAT allows the resulting PR to trigger normal CI. The
-      # repository token remains a functional fallback, but GitHub suppresses
-      # recursive workflow events created with that token.
-      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
-      UPSTREAM_REPOSITORY: ngxson/wllama
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      branch: ${{ steps.integrate.outputs.branch }}
+      changed: ${{ steps.integrate.outputs.changed }}
+      upstream_commit: ${{ steps.integrate.outputs.upstream_commit }}
+      upstream_version: ${{ steps.integrate.outputs.upstream_version }}
 
     steps:
       - name: Checkout main
@@ -36,13 +43,41 @@ jobs:
           ref: main
           submodules: false
 
-      - name: Find and integrate the latest stable upstream tag
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Require the upstream sync PAT
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo 'UPSTREAM_SYNC_TOKEN is not configured' >&2
+            exit 1
+          fi
+
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.permissions.push')" != 'true' ]]; then
+            echo 'UPSTREAM_SYNC_TOKEN cannot push to this repository' >&2
+            exit 1
+          fi
+
+      - name: Integrate latest stable upstream tag
+        id: integrate
+        env:
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+          UPSTREAM_REPOSITORY: ngxson/wllama
         shell: bash
         run: |
           set -euo pipefail
 
+          exec 3>>"$GITHUB_OUTPUT"
+          echo 'changed=false' >&3
           git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
-          git fetch --force upstream '+refs/tags/*:refs/tags/upstream/*'
+          git fetch --force --prune upstream '+refs/tags/*:refs/tags/upstream/*'
 
           mapfile -t upstream_tags < <(
             git for-each-ref \
@@ -51,84 +86,396 @@ jobs:
               | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
               | sort -V
           )
-
           if (( ${#upstream_tags[@]} == 0 )); then
             echo 'No stable upstream release tags found' >&2
             exit 1
           fi
 
+          current_tag=$(node -p "require('./package.json').wllama64.upstreamVersion")
+          current_commit=$(node -p "require('./package.json').wllama64.upstreamCommit")
           latest_tag="${upstream_tags[-1]}"
-          current_tag=''
+          current_ref="refs/tags/upstream/$current_tag"
+          latest_ref="refs/tags/upstream/$latest_tag"
 
-          for tag in "${upstream_tags[@]}"; do
-            if git merge-base --is-ancestor "refs/tags/upstream/$tag" HEAD; then
-              current_tag="$tag"
-            fi
-          done
+          if ! git rev-parse --verify --quiet "${current_ref}^{commit}" >/dev/null; then
+            echo "Configured upstream tag does not exist: $current_tag" >&2
+            exit 1
+          fi
+          detected_current_commit=$(git rev-parse "${current_ref}^{commit}")
+          if [[ "$detected_current_commit" != "$current_commit" ]]; then
+            echo "Configured upstream commit does not match tag $current_tag" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$current_commit" HEAD; then
+            echo "Configured upstream commit is not part of main: $current_commit" >&2
+            exit 1
+          fi
+
+          latest_commit=$(git rev-parse "${latest_ref}^{commit}")
+          echo "Current upstream: $current_tag ($current_commit)"
+          echo "Latest upstream:  $latest_tag ($latest_commit)"
 
           if [[ "$current_tag" == "$latest_tag" ]]; then
-            echo "Already based on the latest upstream release: $latest_tag"
+            echo 'Already based on latest stable upstream release'
+            exit 0
+          fi
+          if [[ "$(printf '%s\n%s\n' "$current_tag" "$latest_tag" | sort -V | tail -n 1)" != "$latest_tag" ]]; then
+            echo "Latest tag $latest_tag is not newer than $current_tag" >&2
+            exit 1
+          fi
+          if git ls-tree -r --name-only "$latest_commit" | grep -Eq '(^|/)\.npmrc$'; then
+            echo "Upstream $latest_tag contains npm configuration; manual review required" >&2
+            exit 1
+          fi
+          if [[ "$DRY_RUN" == 'true' ]]; then
+            echo "Dry run: would prepare upstream $latest_tag at $latest_commit"
             exit 0
           fi
 
           branch="sync/upstream-$latest_tag"
-          title="Sync upstream wllama $latest_tag"
-
+          echo "branch=$branch" >&3
+          echo "upstream_version=$latest_tag" >&3
+          echo "upstream_commit=$latest_commit" >&3
           gh auth setup-git
 
           if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
             existing_pr=$(gh pr list \
-              --state all \
+              --state open \
               --head "$branch" \
               --json url \
               --jq '.[0].url // empty')
 
             if [[ -n "$existing_pr" ]]; then
-              echo "Sync already exists: $existing_pr"
-              exit 0
+              gh pr close "$existing_pr" --comment 'Superseded by a clean automated retry.'
             fi
-
-            gh pr create \
-              --base main \
-              --head "$branch" \
-              --title "$title" \
-              --body "Automated sync candidate for upstream release [$latest_tag](https://github.com/${UPSTREAM_REPOSITORY}/releases/tag/$latest_tag). This workflow never publishes packages. Rebuild and CI gates must pass before merge."
-            exit 0
+            # Sync branches are disposable. Recreate from main so a failed or
+            # manually altered candidate cannot be trusted on a later retry.
+            git push origin --delete "$branch"
           fi
+
+          fork_package="$RUNNER_TEMP/fork-package.json"
+          previous_upstream_package="$RUNNER_TEMP/previous-upstream-package.json"
+          next_upstream_package="$RUNNER_TEMP/next-upstream-package.json"
+          git show origin/main:package.json > "$fork_package"
+          git show "$current_commit:package.json" > "$previous_upstream_package"
+          git show "$latest_commit:package.json" > "$next_upstream_package"
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch --create "$branch"
 
-          if git merge --no-edit --no-ff "refs/tags/upstream/$latest_tag"; then
-            git push --set-upstream origin "$branch"
-            gh pr create \
-              --base main \
-              --head "$branch" \
-              --title "$title" \
-              --body "Automated conflict-free merge of upstream release [$latest_tag](https://github.com/${UPSTREAM_REPOSITORY}/releases/tag/$latest_tag). This workflow never publishes packages. Rebuild and CI gates must pass before merge."
-            exit 0
-          fi
+          set +e
+          git merge --no-commit --no-ff "$latest_commit"
+          merge_status=$?
+          set -e
+
+          # Runtime/source conflicts stay visible. Fork identity, release
+          # controls, and generated outputs are rebuilt from trusted main.
+          fork_owned=(
+            .github
+            .gitignore
+            .npmignore
+            .nvmrc
+            CHANGELOG.md
+            README-dev.md
+            README.md
+            compat/README.md
+            compat/wasm/wllama.js
+            examples/main
+            package-lock.json
+            package.json
+            scripts/check_package_exports.mjs
+            scripts/check_package_size.js
+            scripts/check_wasm_memory.mjs
+            scripts/generate_wasm_from_cdn.js
+            scripts/post_build.sh
+            scripts/prepare_upstream_release.mjs
+            scripts/prepare_upstream_release.test.mjs
+            src/glue/messages.ts
+            src/wasm-from-cdn.ts
+            src/wasm/source-map.ts
+            src/wasm/wllama.js
+            src/wasm/wllama.wasm
+            src/workers-code/generated.ts
+          )
+          git restore --source=origin/main --staged --worktree -- "${fork_owned[@]}"
 
           conflicts=$(git diff --name-only --diff-filter=U)
-          git merge --abort
+          if (( merge_status != 0 )) && [[ -n "$conflicts" ]]; then
+            git merge --abort
+            issue_title="Upstream sync needs manual resolution: $latest_tag"
+            existing_issue=$(TITLE="$issue_title" gh issue list \
+              --state open \
+              --limit 100 \
+              --json title,url \
+              --jq '.[] | select(.title == env.TITLE) | .url' \
+              | head -n 1)
+            if [[ -n "$existing_issue" ]]; then
+              echo "Conflict issue already exists: $existing_issue"
+              exit 0
+            fi
 
-          issue_title="Upstream sync needs manual resolution: $latest_tag"
-          existing_issue=$(TITLE="$issue_title" gh issue list \
+            body=$(printf '%s\n\n%s\n\nConflicting paths:\n\n    %s' \
+              "Upstream release [$latest_tag](https://github.com/${UPSTREAM_REPOSITORY}/releases/tag/$latest_tag) cannot be merged automatically." \
+              "The package remains on $current_tag. Resolve these source conflicts while retaining Memory64, then run the release gates. Nothing was published." \
+              "$conflicts")
+            gh issue create --title "$issue_title" --body "$body"
+            exit 0
+          fi
+          # A nonzero merge status is expected when every conflict was in a
+          # fork-owned/generated path restored above. Git keeps MERGE_HEAD, so
+          # the commit below still records a real merge of the upstream tag.
+          git rev-parse --verify --quiet MERGE_HEAD >/dev/null
+
+          node scripts/prepare_upstream_release.mjs \
+            --fork-package "$fork_package" \
+            --previous-upstream-package "$previous_upstream_package" \
+            --next-upstream-package "$next_upstream_package" \
+            --upstream-commit "$latest_commit"
+
+          # A stable upstream tag cannot modify the eventual OIDC workflow.
+          git diff --exit-code origin/main -- .github
+
+          git add --all
+          git commit -m "Merge upstream Wllama $latest_tag"
+          git push --set-upstream origin "$branch"
+          echo 'changed=true' >&3
+
+  generate:
+    name: Rebuild generated artifacts
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      NPM_CONFIG_USERCONFIG: /dev/null
+
+    steps:
+      - name: Checkout sync branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.prepare.outputs.branch }}
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Prepare lockfiles and install dependencies
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          npm install --package-lock-only --ignore-scripts --prefix examples/main
+          node scripts/generate_wasm_from_cdn.js
+          npm ci --include=dev
+
+      - name: Rebuild both WebAssembly targets and worker
+        run: |
+          npm run build:wasm
+          npm run build:worker
+          npm run check:wasm
+
+      - name: Verify pinned release metadata
+        env:
+          UPSTREAM_COMMIT: ${{ needs.prepare.outputs.upstream_commit }}
+          UPSTREAM_VERSION: ${{ needs.prepare.outputs.upstream_version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import packageJson from './package.json' with { type: 'json' };
+
+          if (packageJson.wllama64.upstreamCommit !== process.env.UPSTREAM_COMMIT) {
+            throw new Error('Prepared package has the wrong upstream commit');
+          }
+          if (packageJson.wllama64.upstreamVersion !== process.env.UPSTREAM_VERSION) {
+            throw new Error('Prepared package has the wrong upstream version');
+          }
+          NODE
+
+          git diff --exit-code origin/main -- .github
+
+      - name: Upload generated release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          path: |
+            compat/wasm/wllama.js
+            examples/main/package-lock.json
+            package-lock.json
+            src/glue/messages.ts
+            src/wasm-from-cdn.ts
+            src/wasm/source-map.ts
+            src/wasm/wllama.js
+            src/wasm/wllama.wasm
+            src/workers-code/generated.ts
+
+  finalize:
+    name: Open and merge gated pull request
+    needs:
+      - prepare
+      - generate
+    if: needs.prepare.outputs.changed == 'true' && needs.generate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 140
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout sync branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.prepare.outputs.branch }}
+          submodules: false
+
+      - name: Download generated release files
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}-${{ github.run_attempt }}
+          path: .
+
+      - name: Commit generated files and enable auto-merge
+        env:
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+          UPSTREAM_COMMIT: ${{ needs.prepare.outputs.upstream_commit }}
+          UPSTREAM_VERSION: ${{ needs.prepare.outputs.upstream_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          generated=(
+            compat/wasm/wllama.js
+            examples/main/package-lock.json
+            package-lock.json
+            src/glue/messages.ts
+            src/wasm-from-cdn.ts
+            src/wasm/source-map.ts
+            src/wasm/wllama.js
+            src/wasm/wllama.wasm
+            src/workers-code/generated.ts
+          )
+          for path in "${generated[@]}"; do
+            test -f "$path"
+          done
+
+          unexpected=$(git status --short | cut -c4- | grep -Ev \
+            '^(compat/wasm/wllama\.js|examples/main/package-lock\.json|package-lock\.json|src/glue/messages\.ts|src/wasm-from-cdn\.ts|src/wasm/source-map\.ts|src/wasm/wllama\.(js|wasm)|src/workers-code/generated\.ts)$' || true)
+          if [[ -n "$unexpected" ]]; then
+            echo "Artifact introduced unexpected paths:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "${generated[@]}"
+          if ! git diff --cached --quiet; then
+            git commit -m "Build Memory64 artifacts for upstream $UPSTREAM_VERSION"
+          fi
+
+          gh auth setup-git
+          git push origin "HEAD:$BRANCH"
+
+          pr_url=$(gh pr list \
+            --state open \
+            --head "$BRANCH" \
+            --json url \
+            --jq '.[0].url // empty')
+          if [[ -z "$pr_url" ]]; then
+            pr_url=$(gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "Sync upstream Wllama $UPSTREAM_VERSION" \
+              --body "Automated stable-tag sync of [Wllama $UPSTREAM_VERSION](https://github.com/ngxson/wllama/releases/tag/$UPSTREAM_VERSION) at [$UPSTREAM_COMMIT](https://github.com/ngxson/wllama/commit/$UPSTREAM_COMMIT). The Memory64 and wasm32 artifacts were rebuilt without credentials. GitHub merges only after required release gates pass; conflicts and failures never publish.")
+          fi
+
+          # Wait for the exact gate ourselves. Branch protection remains a
+          # second barrier, but a settings mistake cannot make this fail open.
+          gate_found=false
+          for _ in $(seq 1 40); do
+            checks=$(gh pr checks "$pr_url" \
+              --json bucket,name,workflow 2>/dev/null || true)
+            checks=${checks:-[]}
+            if jq -e \
+              'any(.[]; .name == "Release gates" and .workflow == "Release gates")' \
+              <<<"$checks" >/dev/null; then
+              gate_found=true
+              break
+            fi
+            sleep 15
+          done
+          if [[ "$gate_found" != 'true' ]]; then
+            echo 'Release gates did not register within 10 minutes' >&2
+            exit 1
+          fi
+
+          checked_head=$(gh pr view "$pr_url" --json headRefOid --jq '.headRefOid')
+          gh pr checks "$pr_url" --watch --fail-fast --interval 30
+          checks=$(gh pr checks "$pr_url" --json bucket,name,workflow)
+          if ! jq -e \
+            '[.[] | select(.name == "Release gates" and .workflow == "Release gates")] | length == 1 and all(.[]; .bucket == "pass")' \
+            <<<"$checks" >/dev/null; then
+            echo 'The exact Release gates check did not pass' >&2
+            exit 1
+          fi
+          current_head=$(gh pr view "$pr_url" --json headRefOid --jq '.headRefOid')
+          if [[ "$current_head" != "$checked_head" ]]; then
+            echo 'Pull request head changed while checks were running' >&2
+            exit 1
+          fi
+
+          gh pr merge --merge --match-head-commit "$checked_head" "$pr_url"
+          echo "Merged after release gates: $pr_url"
+
+  report-failure:
+    name: Report automation failure
+    needs:
+      - prepare
+      - generate
+      - finalize
+    if: >-
+      ${{
+        always() &&
+        (needs.prepare.result == 'failure' ||
+          needs.generate.result == 'failure' ||
+          needs.finalize.result == 'failure')
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Open a deduplicated failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          title='Automatic upstream sync failed'
+          existing=$(TITLE="$title" gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
             --state open \
             --limit 100 \
             --json title,url \
             --jq '.[] | select(.title == env.TITLE) | .url' \
             | head -n 1)
-
-          if [[ -n "$existing_issue" ]]; then
-            echo "Conflict issue already exists: $existing_issue"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" \
+              --repo "$GITHUB_REPOSITORY" \
+              --body "Retry failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 0
           fi
 
-          body=$(printf "%s\n\n%s\n\nConflicting paths:\n%s" \
-            "Upstream release [$latest_tag](https://github.com/${UPSTREAM_REPOSITORY}/releases/tag/$latest_tag) cannot be merged into main automatically." \
-            "Current detected upstream base: ${current_tag:-unknown}. Resolve the files below, rebuild every generated Wasm artifact, and run the release gates. This watcher never publishes packages." \
-            "$conflicts")
-
-          gh issue create --title "$issue_title" --body "$body"
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$title" \
+            --body "The guarded upstream-sync workflow failed before publish. Inspect $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. No npm release was attempted."

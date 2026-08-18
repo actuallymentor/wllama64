@@ -26,8 +26,26 @@ git fetch upstream --tags
 Integrate tested release commits, not arbitrary development snapshots. After an
 upstream sync, rebuild the default Memory64 and wasm32 compatibility artifacts,
 regenerate worker code and source maps, then run the upstream and Memory64
-browser suites. Syncing never publishes automatically; tag and publish a new
-`wllama64` release only after validation.
+browser suites.
+
+`.github/workflows/watch-upstream.yml` checks stable tags daily. A conflict-free
+sync gets a versioned pull request and fresh generated artifacts. GitHub merges
+only after `Release gates` passes, then `.github/workflows/publish-npm.yml`
+rebuilds and tests without credentials and hands the exact tarball to an isolated
+npm OIDC job. Conflicts, concurrent package-map changes, missing compat releases,
+registry errors, and failed gates stop the flow and never publish.
+The sync rejects npm configuration, lifecycle hooks, and unknown package fields
+instead of inheriting publish controls. Lockfile resolution and all other npm
+commands run without the PAT. If npm succeeds before GitHub tag creation, the
+daily retry validates the tarball and recovers the exact release commit from
+npm's signed provenance.
+
+The watcher uses the `UPSTREAM_SYNC_TOKEN` repository secret so its pull-request
+events trigger normal Actions checks. Use a fine-grained PAT scoped only to this
+repository with read/write Contents, Issues, and Pull requests. Upstream patch,
+minor, and major increments map to the same downstream increment. Published
+`main` and tags remain immutable; upstream is merged, never rebased onto public
+history.
 
 Fresh Emscripten 4.0.20 builds can encode equivalent exception-region nesting
 differently, so the Memory64 Wasm binary is not byte-reproducible across hosted
