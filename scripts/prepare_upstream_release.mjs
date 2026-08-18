@@ -10,6 +10,42 @@ import { join, resolve } from 'node:path';
 
 const ABSENT = Symbol('absent');
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const FORK_FIELDS = [
+  'bugs',
+  'description',
+  'exports',
+  'files',
+  'homepage',
+  'main',
+  'module',
+  'name',
+  'prettier',
+  'repository',
+  'type',
+  'types',
+];
+const MERGED_MAP_FIELDS = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+  'peerDependenciesMeta',
+  'scripts',
+];
+const UPSTREAM_METADATA_FIELDS = [
+  'author',
+  'directories',
+  'funding',
+  'keywords',
+  'license',
+  'sideEffects',
+];
+const ALLOWED_UPSTREAM_FIELDS = new Set([
+  ...FORK_FIELDS,
+  ...MERGED_MAP_FIELDS,
+  ...UPSTREAM_METADATA_FIELDS,
+  'version',
+]);
 
 const parseStableVersion = (version, label) => {
   const match = STABLE_VERSION.exec(version);
@@ -127,26 +163,27 @@ export const buildReleasePackage = ({
     currentUpstream: forkPackage.wllama64.upstreamVersion,
     nextUpstream: nextUpstreamPackage.version,
   });
-  const result = structuredClone(nextUpstreamPackage);
+  const unsupported = Object.keys(nextUpstreamPackage).filter(
+    (field) => !ALLOWED_UPSTREAM_FIELDS.has(field)
+  );
+  if (unsupported.length > 0) {
+    throw new Error(
+      `Unsupported upstream package fields require review: ${unsupported.join(', ')}`
+    );
+  }
+
+  const result = {};
+
+  // Metadata is copied from a narrow allowlist. Fields that change install or
+  // publish behavior (for example private, publishConfig, engines, os, or cpu)
+  // stop the automated release and require explicit review.
+  copyFields(result, nextUpstreamPackage, UPSTREAM_METADATA_FIELDS);
 
   // These fields define the downstream distribution contract. Upstream source,
   // dependencies, and unchanged scripts still flow through from the new tag.
-  copyFields(result, forkPackage, [
-    'name',
-    'description',
-    'main',
-    'module',
-    'types',
-    'type',
-    'exports',
-    'files',
-    'repository',
-    'bugs',
-    'homepage',
-    'prettier',
-  ]);
+  copyFields(result, forkPackage, FORK_FIELDS);
 
-  for (const field of ['scripts', 'dependencies', 'devDependencies']) {
+  for (const field of MERGED_MAP_FIELDS) {
     result[field] = mergePackageMap({
       previous: previousUpstreamPackage[field],
       fork: forkPackage[field],

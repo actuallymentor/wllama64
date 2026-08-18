@@ -123,3 +123,37 @@ test('release package keeps fork identity and accepts upstream dependencies', ()
   assert.equal(result.wllama64.upstreamCommit, 'next');
   assert.equal(result.wllama64.compatVersion, '3.7.0');
 });
+
+test('release package refuses upstream fields that affect publishing', () => {
+  const forkPackage = {
+    name: 'wllama64',
+    version: '1.0.0',
+    scripts: {},
+    wllama64: {
+      upstreamVersion: '3.6.0',
+      upstreamCommit: 'old',
+      compatPackage: '@wllama/wllama-compat',
+      compatVersion: '3.6.0',
+    },
+  };
+  const previousUpstreamPackage = {
+    name: '@wllama/wllama',
+    version: '3.6.0',
+    scripts: {},
+  };
+
+  assert.throws(
+    () =>
+      buildReleasePackage({
+        forkPackage,
+        previousUpstreamPackage,
+        nextUpstreamPackage: {
+          ...previousUpstreamPackage,
+          version: '3.6.1',
+          publishConfig: { registry: 'https://example.invalid' },
+        },
+        upstreamCommit: 'next',
+      }),
+    /publishConfig/
+  );
+});

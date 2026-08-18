@@ -43,6 +43,11 @@ jobs:
           ref: main
           submodules: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
       - name: Require the upstream sync PAT
         env:
           GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
@@ -368,6 +373,29 @@ jobs:
 
           gh auth setup-git
           git push origin "HEAD:$BRANCH"
+
+          # Auto-merge is safe only while repository policy requires the exact
+          # release-gate check. Fail closed if an administrator weakens it.
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.allow_auto_merge')" != 'true' ]]; then
+            echo 'Repository auto-merge is disabled' >&2
+            exit 1
+          fi
+          protection=$(gh api "repos/$GITHUB_REPOSITORY/branches/main/protection")
+          required_gate=$(jq -r \
+            '.required_status_checks.contexts // [] | any(. == "Release gates")' \
+            <<<"$protection")
+          strict_checks=$(jq -r \
+            '.required_status_checks.strict == true' \
+            <<<"$protection")
+          pull_requests_required=$(jq -r \
+            '.required_pull_request_reviews != null' \
+            <<<"$protection")
+          administrators_enforced=$(jq -r '.enforce_admins.enabled == true' <<<"$protection")
+          if [[ "$required_gate" != 'true' || "$strict_checks" != 'true' || \
+            "$pull_requests_required" != 'true' || "$administrators_enforced" != 'true' ]]; then
+            echo 'main must strictly require pull requests and Release gates for all users' >&2
+            exit 1
+          fi
 
           pr_url=$(gh pr list \
             --state open \
