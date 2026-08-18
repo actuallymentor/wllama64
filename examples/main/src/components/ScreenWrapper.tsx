@@ -1,8 +1,10 @@
+import type { ReactNode } from 'react';
+
 export default function ScreenWrapper({
   children,
   fitScreen,
 }: {
-  children: any;
+  children: ReactNode;
   fitScreen?: boolean;
 }) {
   return (

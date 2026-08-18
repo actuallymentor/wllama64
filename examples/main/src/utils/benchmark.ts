@@ -119,5 +119,12 @@ async function perplexity() {
   */
 }
 
-(window as any).__benchmark = benchmark;
-(window as any).__perplexity = perplexity;
+declare global {
+  interface Window {
+    __benchmark: typeof benchmark;
+    __perplexity: typeof perplexity;
+  }
+}
+
+window.__benchmark = benchmark;
+window.__perplexity = perplexity;

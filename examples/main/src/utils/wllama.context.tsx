@@ -1,6 +1,13 @@
-import { createContext, useContext, useMemo, useState } from 'react';
+import {
+  createContext,
+  type ReactNode,
+  useContext,
+  useMemo,
+  useState,
+} from 'react';
 import {
   DebugLogger,
+  getErrorMessage,
   getDefaultScreen,
   useDidMount,
   WllamaStorage,
@@ -61,7 +68,7 @@ interface WllamaContextValue {
   currScreen: Screen;
 }
 
-const WllamaContext = createContext<WllamaContextValue>({} as any);
+const WllamaContext = createContext<WllamaContextValue | undefined>(undefined);
 
 const createWllamaInstance = () => {
   const instance = new Wllama(WLLAMA_CONFIG_PATHS, { logger: DebugLogger });
@@ -76,7 +83,7 @@ const resetWllamaInstance = () => {
   wllamaInstance = createWllamaInstance();
 };
 
-export const WllamaProvider = ({ children }: any) => {
+export const WllamaProvider = ({ children }: { children: ReactNode }) => {
   const [isGenerating, setGenerating] = useState(false);
   const [currentConvId, setCurrentConvId] = useState(-1);
   const [currScreen, setScreen] = useState<Screen>(getDefaultScreen());
@@ -149,8 +156,8 @@ export const WllamaProvider = ({ children }: any) => {
       );
       updateModelDownloadState(model.url, -1);
       await refreshCachedModels();
-    } catch (e) {
-      alert((e as any)?.message || 'unknown error while downloading model');
+    } catch (error) {
+      alert(getErrorMessage(error, 'unknown error while downloading model'));
     }
   };
 
@@ -188,9 +195,9 @@ export const WllamaProvider = ({ children }: any) => {
         supportsImage: wllamaInstance.supportInputModality('image'),
         supportsAudio: wllamaInstance.supportInputModality('audio'),
       });
-    } catch (e) {
+    } catch (error) {
       resetWllamaInstance();
-      alert(`Failed to load model: ${(e as any).message ?? 'Unknown error'}`);
+      alert(`Failed to load model: ${getErrorMessage(error, 'Unknown error')}`);
       setLoadedModel(undefined);
     }
   };
@@ -241,7 +248,7 @@ export const WllamaProvider = ({ children }: any) => {
           callback(accumulatedText);
         }
       }
-    } catch (_) {
+    } catch {
       // ignore abort errors
     }
     stopSignal = false;
@@ -330,4 +337,10 @@ export const WllamaProvider = ({ children }: any) => {
   );
 };
 
-export const useWllama = () => useContext(WllamaContext);
+export const useWllama = () => {
+  const context = useContext(WllamaContext);
+  if (!context) {
+    throw new Error('useWllama must be used inside WllamaProvider');
+  }
+  return context;
+};

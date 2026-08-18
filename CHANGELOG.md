@@ -7,6 +7,8 @@
 - Automate guarded stable-tag sync, release gates, and npm trusted publishing.
 - Isolate untrusted builds from PAT and npm OIDC credentials.
 - Recover partial releases from npm provenance and reject unsafe package hooks.
+- Refresh browser tests, build tooling, and GitHub Actions runtimes.
+- Migrate the demo to React 19, Vite 8, Tailwind CSS 4, and ESLint 10.
 
 ## [1.0.0] - 2026-08-18
 

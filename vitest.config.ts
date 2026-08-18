@@ -1,3 +1,5 @@
+import { playwright } from '@vitest/browser-playwright';
+import { webdriverio } from '@vitest/browser-webdriverio';
 import { defineConfig } from 'vitest/config';
 
 const SAFARI = process.env.BROWSER === 'safari';
@@ -6,13 +8,26 @@ const AUTO = process.env.AUTO === '1';
 const COMPAT = process.env.COMPAT === '1';
 const CI = !!process.env.CI;
 
-const chromeArgsCI = ['disable-gpu', 'no-sandbox', 'disable-setuid-sandbox'];
-const chromeArgsWebGPU = [
-  'no-sandbox',
-  'disable-setuid-sandbox',
-  'enable-unsafe-webgpu',
-  'enable-features=WebGPU',
+const chromeArgsCI = [
+  '--disable-gpu',
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
 ];
+const chromeArgsWebGPU = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--enable-unsafe-webgpu',
+  '--enable-features=WebGPU',
+];
+
+const browserName = process.env.BROWSER ?? 'chromium';
+const browserProvider = SAFARI
+  ? webdriverio()
+  : playwright({
+      launchOptions: {
+        args: WEBGPU ? chromeArgsWebGPU : CI ? chromeArgsCI : [],
+      },
+    });
 
 export default defineConfig({
   define: {
@@ -32,28 +47,8 @@ export default defineConfig({
     browser: {
       enabled: true,
       headless: AUTO || CI,
-      name: process.env.BROWSER ?? 'chromium',
-      provider: SAFARI ? 'webdriverio' : 'playwright',
-      // https://playwright.dev
-      providerOptions: WEBGPU
-        ? { launch: { args: chromeArgsWebGPU.map((a) => `--${a}`) } }
-        : process.env.GITHUB_ACTIONS
-          ? {
-              capabilities: {
-                'goog:chromeOptions': {
-                  args: chromeArgsCI,
-                },
-              },
-            }
-          : SAFARI
-            ? {
-                capabilities: {
-                  alwaysMatch: { browserName: 'safari' },
-                  firstMatch: [{}],
-                  browserName: 'safari',
-                },
-              }
-            : {},
+      provider: browserProvider,
+      instances: [{ browser: browserName }],
     },
   },
   server: {

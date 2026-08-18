@@ -10,8 +10,9 @@ import {
   faBug,
 } from '@fortawesome/free-solid-svg-icons';
 import { WLLAMA_VERSION } from '../config';
+import type { ReactNode } from 'react';
 
-export default function Sidebar({ children }: { children: any }) {
+export default function Sidebar({ children }: { children: ReactNode }) {
   const { currentConvId, navigateTo, currScreen, loadedModel } = useWllama();
   const { conversations, getConversationById, deleteConversation } =
     useMessages();

@@ -44,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout exact main commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -52,7 +52,7 @@ jobs:
           submodules: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
@@ -302,7 +302,7 @@ jobs:
 
     steps:
       - name: Checkout exact main commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -310,7 +310,7 @@ jobs:
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
@@ -377,7 +377,7 @@ jobs:
           NODE
 
       - name: Upload exact npm tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-package-${{ needs.inspect.outputs.version }}-${{ github.run_attempt }}
           path: ${{ steps.pack.outputs.tarball }}
@@ -399,7 +399,7 @@ jobs:
 
     steps:
       - name: Setup Node.js for npm trusted publishing
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -408,7 +408,7 @@ jobs:
         run: npm install --global npm@11.17.0
 
       - name: Download exact tested tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: npm-package-${{ needs.inspect.outputs.version }}-${{ github.run_attempt }}
           path: release-artifact
@@ -517,7 +517,7 @@ jobs:
 
     steps:
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}

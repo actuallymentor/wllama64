@@ -84,10 +84,18 @@ const parseModelUrl = (modelUrl: string): string[] => {
 
 const sumArr = (arr: number[]) => arr.reduce((sum, num) => sum + num, 0);
 
-// for debugging only
-// @ts-ignore
+declare global {
+  interface Window {
+    _exportModelList: () => void;
+  }
+}
+
+// Exposed in DevTools for debugging saved models.
 window._exportModelList = function () {
-  const list: any[] = WllamaStorage.load('custom_models', []);
+  const list: Record<string, unknown>[] = WllamaStorage.load(
+    'custom_models',
+    []
+  );
   const listExported = list.map((m) => {
     delete m.userAdded;
     return m;

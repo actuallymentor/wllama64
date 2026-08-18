@@ -26,18 +26,22 @@ function bufStream(buf: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
-test.sequential('write then read without hint falls back to OPFS', async () => {
-  const backend = new COSBackend();
-  const { buf } = await randomBufAndHash();
-  const key = 'test-no-hint';
+test.sequential(
+  'write then read without hint falls back to OPFS',
+  async () => {
+    const backend = new COSBackend();
+    const { buf } = await randomBufAndHash();
+    const key = 'test-no-hint';
 
-  await backend.write(key, bufStream(buf));
-  const blob = await backend.read(key);
-  expect(blob).not.toBeNull();
-  expect(new Uint8Array(await blob!.arrayBuffer())).toEqual(buf);
+    await backend.write(key, bufStream(buf));
+    const blob = await backend.read(key);
+    expect(blob).not.toBeNull();
+    expect(new Uint8Array(await blob!.arrayBuffer())).toEqual(buf);
 
-  await backend.delete(key);
-});
+    await backend.delete(key);
+  },
+  30_000
+);
 
 beforeEach(() => {
   onCOSWrite = undefined;

@@ -1,13 +1,19 @@
-import { useCallback, useEffect } from 'react';
+import { type DependencyList, useCallback, useEffect, useRef } from 'react';
 import { Screen } from './types';
 
 export const delay = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-export const useDidMount = (callback: () => any) =>
+export const useDidMount = (callback: () => void | Promise<void>) => {
+  const callbackRef = useRef(callback);
+
   useEffect(() => {
-    callback();
+    void callbackRef.current();
   }, []);
+};
+
+export const getErrorMessage = (error: unknown, fallback: string): string =>
+  error instanceof Error ? error.message : fallback;
 
 type StorageKey = 'conversations' | 'params' | 'welcome' | 'custom_models';
 
@@ -44,31 +50,31 @@ export const toHumanReadableSize = (bytes: number): string => {
 
 export const DebugLogger = {
   content: [] as string[],
-  debug(...args: any) {
+  debug(...args: unknown[]) {
     console.debug('🔧', ...args);
     DebugLogger.content.push(`🔧 ${DebugLogger.argsToStr(args)}`);
   },
-  log(...args: any) {
+  log(...args: unknown[]) {
     console.log('ℹ️', ...args);
     DebugLogger.content.push(`ℹ️ ${DebugLogger.argsToStr(args)}`);
   },
-  warn(...args: any) {
+  warn(...args: unknown[]) {
     console.warn('⚠️', ...args);
     DebugLogger.content.push(`⚠️ ${DebugLogger.argsToStr(args)}`);
   },
-  error(...args: any) {
+  error(...args: unknown[]) {
     console.error('☠️', ...args);
     DebugLogger.content.push(`☠️ ${DebugLogger.argsToStr(args)}`);
   },
-  argsToStr(args: any[]): string {
+  argsToStr(args: unknown[]): string {
     return args
       .map((arg) => {
-        if (arg.startsWith) {
+        if (typeof arg === 'string') {
           return arg;
         } else {
           try {
             return JSON.stringify(arg, null, 2);
-          } catch (_) {
+          } catch {
             return '';
           }
         }
@@ -77,11 +83,13 @@ export const DebugLogger = {
   },
 };
 
-export function useDebounce<T extends any[]>(
-  effect: (...args: T) => void,
-  dependencies: any[],
+export function useDebounce(
+  effect: () => void,
+  dependencies: DependencyList,
   delay: number
 ): void {
+  // The caller controls callback refresh through this dependency list.
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/use-memo
   const callback = useCallback(effect, dependencies);
   useEffect(() => {
     const timeout = setTimeout(callback, delay);
