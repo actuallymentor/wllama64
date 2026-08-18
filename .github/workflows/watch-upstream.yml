@@ -1,4 +1,5 @@
 name: Watch upstream releases
+run-name: Check for upstream Wllama releases
 
 on:
   schedule:

@@ -7,7 +7,7 @@ the WebAssembly binding for [llama.cpp](https://github.com/ggerganov/llama.cpp).
 It keeps the upstream browser API while raising the default WebAssembly linear
 memory ceiling from 4 GiB to 16 GiB through Memory64.
 
-Current release: `1.0.0-rc.2`, based on upstream Wllama `3.6.0`
+Current release: `1.0.0`, based on upstream Wllama `3.6.0`
 ([`f16050d`](https://github.com/ngxson/wllama/commit/f16050d)).
 
 - [Repository](https://github.com/actuallymentor/wllama64)
@@ -69,7 +69,7 @@ Upstream-hosted examples retained by this fork:
 Install it:
 
 ```bash
-npm install wllama64@1.0.0-rc.2
+npm install wllama64@1.0.0
 ```
 
 Copy `node_modules/wllama64/esm/wasm/wllama.wasm` to your app's public assets,
