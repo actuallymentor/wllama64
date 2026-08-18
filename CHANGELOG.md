@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-rc.2] - 2026-08-18
+
+### Changed
+
+- Verify token-free publishing through the protected GitHub Actions workflow.
+
 ## [1.0.0-rc.1] - 2026-08-17
 
 ### Added

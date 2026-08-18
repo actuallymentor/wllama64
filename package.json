@@ -1,6 +1,6 @@
 {
   "name": "wllama64",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "description": "Memory64 WebAssembly binding for llama.cpp - Enabling on-browser LLM inference",
   "main": "./esm/index.cjs",
   "module": "./esm/index.js",
