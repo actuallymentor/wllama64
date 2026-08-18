@@ -13,6 +13,7 @@ const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const FORK_FIELDS = [
   'bugs',
   'description',
+  'directories',
   'exports',
   'files',
   'homepage',
@@ -34,7 +35,6 @@ const MERGED_MAP_FIELDS = [
 ];
 const UPSTREAM_METADATA_FIELDS = [
   'author',
-  'directories',
   'funding',
   'keywords',
   'license',
@@ -45,6 +45,22 @@ const ALLOWED_UPSTREAM_FIELDS = new Set([
   ...MERGED_MAP_FIELDS,
   ...UPSTREAM_METADATA_FIELDS,
   'version',
+]);
+const FORBIDDEN_LIFECYCLE_SCRIPTS = new Set([
+  'dependencies',
+  'install',
+  'postinstall',
+  'postpack',
+  'postpublish',
+  'postuninstall',
+  'preinstall',
+  'prepack',
+  'prepare',
+  'prepublish',
+  'prepublishOnly',
+  'preuninstall',
+  'publish',
+  'uninstall',
 ]);
 
 const parseStableVersion = (version, label) => {
@@ -192,6 +208,24 @@ export const buildReleasePackage = ({
     });
 
     if (Object.keys(result[field]).length === 0) delete result[field];
+  }
+
+  const lifecycleScripts = Object.keys(result.scripts ?? {}).filter((script) =>
+    FORBIDDEN_LIFECYCLE_SCRIPTS.has(script)
+  );
+  if (lifecycleScripts.length > 0) {
+    throw new Error(
+      `Package lifecycle scripts require review: ${lifecycleScripts.join(', ')}`
+    );
+  }
+
+  const directoryFields = Object.keys(result.directories ?? {});
+  if (
+    directoryFields.some((field) => field !== 'example') ||
+    (hasOwn(result.directories, 'example') &&
+      result.directories.example !== 'examples')
+  ) {
+    throw new Error('Package directories must only identify examples');
   }
 
   result.version = version;

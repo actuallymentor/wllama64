@@ -123,6 +123,10 @@ jobs:
             echo "Latest tag $latest_tag is not newer than $current_tag" >&2
             exit 1
           fi
+          if git ls-tree -r --name-only "$latest_commit" | grep -Eq '(^|/)\.npmrc$'; then
+            echo "Upstream $latest_tag contains npm configuration; manual review required" >&2
+            exit 1
+          fi
           if [[ "$DRY_RUN" == 'true' ]]; then
             echo "Dry run: would prepare upstream $latest_tag at $latest_commit"
             exit 0
@@ -228,9 +232,6 @@ jobs:
             --previous-upstream-package "$previous_upstream_package" \
             --next-upstream-package "$next_upstream_package" \
             --upstream-commit "$latest_commit"
-          npm install --package-lock-only --ignore-scripts
-          npm install --package-lock-only --ignore-scripts --prefix examples/main
-          node scripts/generate_wasm_from_cdn.js
 
           # A stable upstream tag cannot modify the eventual OIDC workflow.
           git diff --exit-code origin/main -- .github
@@ -248,6 +249,8 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+    env:
+      NPM_CONFIG_USERCONFIG: /dev/null
 
     steps:
       - name: Checkout sync branch
@@ -263,8 +266,12 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      - name: Install dependencies
-        run: npm ci --include=dev
+      - name: Prepare lockfiles and install dependencies
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          npm install --package-lock-only --ignore-scripts --prefix examples/main
+          node scripts/generate_wasm_from_cdn.js
+          npm ci --include=dev
 
       - name: Rebuild both WebAssembly targets and worker
         run: |
@@ -299,6 +306,8 @@ jobs:
           compression-level: 0
           path: |
             compat/wasm/wllama.js
+            examples/main/package-lock.json
+            package-lock.json
             src/glue/messages.ts
             src/wasm-from-cdn.ts
             src/wasm/source-map.ts
@@ -307,13 +316,13 @@ jobs:
             src/workers-code/generated.ts
 
   finalize:
-    name: Open auto-merge pull request
+    name: Open and merge gated pull request
     needs:
       - prepare
       - generate
     if: needs.prepare.outputs.changed == 'true' && needs.generate.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 140
     permissions:
       contents: write
       pull-requests: write
@@ -345,6 +354,8 @@ jobs:
 
           generated=(
             compat/wasm/wllama.js
+            examples/main/package-lock.json
+            package-lock.json
             src/glue/messages.ts
             src/wasm-from-cdn.ts
             src/wasm/source-map.ts
@@ -357,7 +368,7 @@ jobs:
           done
 
           unexpected=$(git status --short | cut -c4- | grep -Ev \
-            '^(compat/wasm/wllama\.js|src/glue/messages\.ts|src/wasm-from-cdn\.ts|src/wasm/source-map\.ts|src/wasm/wllama\.(js|wasm)|src/workers-code/generated\.ts)$' || true)
+            '^(compat/wasm/wllama\.js|examples/main/package-lock\.json|package-lock\.json|src/glue/messages\.ts|src/wasm-from-cdn\.ts|src/wasm/source-map\.ts|src/wasm/wllama\.(js|wasm)|src/workers-code/generated\.ts)$' || true)
           if [[ -n "$unexpected" ]]; then
             echo "Artifact introduced unexpected paths:" >&2
             echo "$unexpected" >&2
@@ -374,29 +385,6 @@ jobs:
           gh auth setup-git
           git push origin "HEAD:$BRANCH"
 
-          # Auto-merge is safe only while repository policy requires the exact
-          # release-gate check. Fail closed if an administrator weakens it.
-          if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq '.allow_auto_merge')" != 'true' ]]; then
-            echo 'Repository auto-merge is disabled' >&2
-            exit 1
-          fi
-          protection=$(gh api "repos/$GITHUB_REPOSITORY/branches/main/protection")
-          required_gate=$(jq -r \
-            '.required_status_checks.contexts // [] | any(. == "Release gates")' \
-            <<<"$protection")
-          strict_checks=$(jq -r \
-            '.required_status_checks.strict == true' \
-            <<<"$protection")
-          pull_requests_required=$(jq -r \
-            '.required_pull_request_reviews != null' \
-            <<<"$protection")
-          administrators_enforced=$(jq -r '.enforce_admins.enabled == true' <<<"$protection")
-          if [[ "$required_gate" != 'true' || "$strict_checks" != 'true' || \
-            "$pull_requests_required" != 'true' || "$administrators_enforced" != 'true' ]]; then
-            echo 'main must strictly require pull requests and Release gates for all users' >&2
-            exit 1
-          fi
-
           pr_url=$(gh pr list \
             --state open \
             --head "$BRANCH" \
@@ -410,8 +398,36 @@ jobs:
               --body "Automated stable-tag sync of [Wllama $UPSTREAM_VERSION](https://github.com/ngxson/wllama/releases/tag/$UPSTREAM_VERSION) at [$UPSTREAM_COMMIT](https://github.com/ngxson/wllama/commit/$UPSTREAM_COMMIT). The Memory64 and wasm32 artifacts were rebuilt without credentials. GitHub merges only after required release gates pass; conflicts and failures never publish.")
           fi
 
-          gh pr merge --auto --merge "$pr_url"
-          echo "Auto-merge armed: $pr_url"
+          # Wait for the exact gate ourselves. Branch protection remains a
+          # second barrier, but a settings mistake cannot make this fail open.
+          gate_found=false
+          for _ in $(seq 1 40); do
+            checks=$(gh pr checks "$pr_url" \
+              --json bucket,name,workflow 2>/dev/null || printf '[]')
+            if jq -e \
+              'any(.[]; .name == "Release gates" and .workflow == "Release gates")' \
+              <<<"$checks" >/dev/null; then
+              gate_found=true
+              break
+            fi
+            sleep 15
+          done
+          if [[ "$gate_found" != 'true' ]]; then
+            echo 'Release gates did not register within 10 minutes' >&2
+            exit 1
+          fi
+
+          gh pr checks "$pr_url" --watch --fail-fast --interval 30
+          checks=$(gh pr checks "$pr_url" --json bucket,name,workflow)
+          if ! jq -e \
+            '[.[] | select(.name == "Release gates" and .workflow == "Release gates")] | length == 1 and all(.[]; .bucket == "pass")' \
+            <<<"$checks" >/dev/null; then
+            echo 'The exact Release gates check did not pass' >&2
+            exit 1
+          fi
+
+          gh pr merge --merge "$pr_url"
+          echo "Merged after release gates: $pr_url"
 
   report-failure:
     name: Report automation failure

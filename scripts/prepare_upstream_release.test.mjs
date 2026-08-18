@@ -157,3 +157,68 @@ test('release package refuses upstream fields that affect publishing', () => {
     /publishConfig/
   );
 });
+
+test('release package refuses automatic lifecycle scripts', () => {
+  const forkPackage = {
+    name: 'wllama64',
+    version: '1.0.0',
+    scripts: { build: 'build' },
+    wllama64: {
+      upstreamVersion: '3.6.0',
+      compatPackage: '@wllama/wllama-compat',
+    },
+  };
+  const previousUpstreamPackage = {
+    name: '@wllama/wllama',
+    version: '3.6.0',
+    scripts: { build: 'build' },
+  };
+
+  for (const script of ['preinstall', 'postinstall', 'prepack', 'prepare']) {
+    assert.throws(
+      () =>
+        buildReleasePackage({
+          forkPackage,
+          previousUpstreamPackage,
+          nextUpstreamPackage: {
+            ...previousUpstreamPackage,
+            version: '3.6.1',
+            scripts: { build: 'build', [script]: 'unsafe' },
+          },
+          upstreamCommit: 'next',
+        }),
+      new RegExp(script)
+    );
+  }
+});
+
+test('release package keeps only the fork example directory', () => {
+  const forkPackage = {
+    name: 'wllama64',
+    version: '1.0.0',
+    directories: { example: 'examples' },
+    scripts: {},
+    wllama64: {
+      upstreamVersion: '3.6.0',
+      compatPackage: '@wllama/wllama-compat',
+    },
+  };
+  const previousUpstreamPackage = {
+    name: '@wllama/wllama',
+    version: '3.6.0',
+    directories: { example: 'examples' },
+    scripts: {},
+  };
+  const result = buildReleasePackage({
+    forkPackage,
+    previousUpstreamPackage,
+    nextUpstreamPackage: {
+      ...previousUpstreamPackage,
+      version: '3.6.1',
+      directories: { bin: 'bin' },
+    },
+    upstreamCommit: 'next',
+  });
+
+  assert.deepEqual(result.directories, { example: 'examples' });
+});

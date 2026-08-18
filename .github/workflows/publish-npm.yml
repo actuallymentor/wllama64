@@ -134,25 +134,28 @@ jobs:
                 `npm registry returned ${response.status} for ${name}@${version}`
               );
             }
-            return response.status;
+            return {
+              metadata: response.status === 200 ? await response.json() : null,
+              status: response.status,
+            };
           };
 
-          const packageStatus = await registryStatus(
+          const packageResult = await registryStatus(
             packageJson.name,
             process.env.RELEASE_VERSION
           );
-          const compatStatus = await registryStatus(
+          const compatResult = await registryStatus(
             packageJson.wllama64.compatPackage,
             packageJson.wllama64.compatVersion
           );
 
-          if (compatStatus !== 200) {
+          if (compatResult.status !== 200) {
             throw new Error(
               `Missing compatibility package ${packageJson.wllama64.compatPackage}@${packageJson.wllama64.compatVersion}`
             );
           }
 
-          const shouldPublish = packageStatus === 404;
+          const shouldPublish = packageResult.status === 404;
           let releaseCommit = process.env.GITHUB_SHA;
           if (!shouldPublish) {
             const response = await fetch(
@@ -180,6 +183,10 @@ jobs:
             const packageSubject = payload.subject?.find(
               ({ name }) => name === expectedSubject
             );
+            const integrity = packageResult.metadata?.dist?.integrity;
+            const expectedDigest = integrity?.startsWith('sha512-')
+              ? Buffer.from(integrity.slice('sha512-'.length), 'base64').toString('hex')
+              : null;
             const workflow = payload.predicate?.buildDefinition?.externalParameters?.workflow;
             const dependencies =
               payload.predicate?.buildDefinition?.resolvedDependencies ?? [];
@@ -193,7 +200,7 @@ jobs:
                 `https://github.com/${process.env.GITHUB_REPOSITORY}` ||
               workflow?.path !== '.github/workflows/publish-npm.yml' ||
               workflow?.ref !== 'refs/heads/main' ||
-              !packageSubject?.digest?.sha512 ||
+              packageSubject?.digest?.sha512 !== expectedDigest ||
               !/^[0-9a-f]{40}$/.test(releaseCommit ?? '')
             ) {
               throw new Error('Published package provenance does not match this workflow');
@@ -208,11 +215,73 @@ jobs:
             process.env.GITHUB_OUTPUT,
             `release_commit=${releaseCommit}\n`
           );
+          if (!shouldPublish) {
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              `recovery_tarball=${packageResult.metadata.dist.tarball}\n`
+            );
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              `recovery_digest=${packageSubject.digest.sha512}\n`
+            );
+          }
           console.log(
             shouldPublish
               ? `${packageJson.name}@${process.env.RELEASE_VERSION} is available`
               : `${packageJson.name}@${process.env.RELEASE_VERSION} is already published`
           );
+          NODE
+
+      - name: Validate an existing recovery tarball
+        if: steps.registry.outputs.should_publish == 'false'
+        env:
+          RECOVERY_TARBALL: ${{ steps.registry.outputs.recovery_tarball }}
+          RECOVERY_DIGEST: ${{ steps.registry.outputs.recovery_digest }}
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          curl --fail --location --silent --show-error \
+            "$RECOVERY_TARBALL" \
+            --output "$RUNNER_TEMP/recovery.tgz"
+          actual_digest=$(sha512sum "$RUNNER_TEMP/recovery.tgz" | cut -d ' ' -f 1)
+          if [[ "$actual_digest" != "$RECOVERY_DIGEST" ]]; then
+            echo 'Recovery tarball does not match npm provenance' >&2
+            exit 1
+          fi
+          package_manifest=$(tar -xOf "$RUNNER_TEMP/recovery.tgz" package/package.json)
+          PACKAGE_MANIFEST="$package_manifest" node --input-type=module <<'NODE'
+          const packageJson = JSON.parse(process.env.PACKAGE_MANIFEST);
+          const allowed = new Set([
+            'author', 'bugs', 'dependencies', 'description', 'devDependencies',
+            'directories', 'exports', 'files', 'funding', 'homepage', 'keywords',
+            'license', 'main', 'module', 'name', 'optionalDependencies',
+            'peerDependencies', 'peerDependenciesMeta', 'prettier', 'repository',
+            'scripts', 'sideEffects', 'type', 'types', 'version', 'wllama64',
+          ]);
+          const lifecycle = new Set([
+            'dependencies', 'install', 'postinstall', 'postpack', 'postpublish',
+            'postuninstall', 'preinstall', 'prepack', 'prepare', 'prepublish',
+            'prepublishOnly', 'preuninstall', 'publish', 'uninstall',
+          ]);
+          const unexpected = Object.keys(packageJson).filter((key) => !allowed.has(key));
+          const unsafeScripts = Object.keys(packageJson.scripts ?? {}).filter((key) =>
+            lifecycle.has(key)
+          );
+          const directoryKeys = Object.keys(packageJson.directories ?? {});
+          if (packageJson.name !== 'wllama64' || packageJson.version !== process.env.RELEASE_VERSION) {
+            throw new Error('Recovery tarball identity does not match the release');
+          }
+          if (unexpected.length > 0 || unsafeScripts.length > 0) {
+            throw new Error('Recovery tarball contains unsafe package metadata');
+          }
+          if (
+            directoryKeys.some((key) => key !== 'example') ||
+            (Object.hasOwn(packageJson.directories ?? {}, 'example') &&
+              packageJson.directories.example !== 'examples')
+          ) {
+            throw new Error('Recovery tarball contains unsafe package directories');
+          }
           NODE
 
   build:
@@ -278,7 +347,7 @@ jobs:
       - name: Pack and inspect publish artifact
         id: pack
         run: |
-          npm pack --json > pack-result.json
+          npm pack --ignore-scripts --json > pack-result.json
 
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -397,8 +466,24 @@ jobs:
             'wllama64',
           ]);
           const unexpected = Object.keys(packageJson).filter((key) => !allowed.has(key));
-          if (unexpected.length > 0) {
-            throw new Error(`Refusing unexpected package fields: ${unexpected.join(', ')}`);
+          const lifecycle = new Set([
+            'dependencies', 'install', 'postinstall', 'postpack', 'postpublish',
+            'postuninstall', 'preinstall', 'prepack', 'prepare', 'prepublish',
+            'prepublishOnly', 'preuninstall', 'publish', 'uninstall',
+          ]);
+          const unsafeScripts = Object.keys(packageJson.scripts ?? {}).filter((key) =>
+            lifecycle.has(key)
+          );
+          const directoryKeys = Object.keys(packageJson.directories ?? {});
+          if (unexpected.length > 0 || unsafeScripts.length > 0) {
+            throw new Error('Refusing unsafe package metadata');
+          }
+          if (
+            directoryKeys.some((key) => key !== 'example') ||
+            (Object.hasOwn(packageJson.directories ?? {}, 'example') &&
+              packageJson.directories.example !== 'examples')
+          ) {
+            throw new Error('Refusing unsafe package directories');
           }
           NODE
 

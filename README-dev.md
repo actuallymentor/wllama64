@@ -34,9 +34,11 @@ only after `Release gates` passes, then `.github/workflows/publish-npm.yml`
 rebuilds and tests without credentials and hands the exact tarball to an isolated
 npm OIDC job. Conflicts, concurrent package-map changes, missing compat releases,
 registry errors, and failed gates stop the flow and never publish.
-The sync rejects unknown upstream package fields instead of inheriting publish
-controls. If npm succeeds before GitHub tag creation, the daily retry recovers
-the exact release commit from npm's signed provenance.
+The sync rejects npm configuration, lifecycle hooks, and unknown package fields
+instead of inheriting publish controls. Lockfile resolution and all other npm
+commands run without the PAT. If npm succeeds before GitHub tag creation, the
+daily retry validates the tarball and recovers the exact release commit from
+npm's signed provenance.
 
 The watcher uses the `UPSTREAM_SYNC_TOKEN` repository secret so its pull-request
 events trigger normal Actions checks. Use a fine-grained PAT scoped only to this
