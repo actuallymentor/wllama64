@@ -1,4 +1,5 @@
 name: Publish npm package
+run-name: Publish wllama64@${{ inputs.version }} to npm (${{ inputs.dist_tag }})
 
 on:
   workflow_dispatch:
