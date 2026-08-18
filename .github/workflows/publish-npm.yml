@@ -260,9 +260,10 @@ jobs:
             'scripts', 'sideEffects', 'type', 'types', 'version', 'wllama64',
           ]);
           const lifecycle = new Set([
-            'dependencies', 'install', 'postinstall', 'postpack', 'postpublish',
-            'postuninstall', 'preinstall', 'prepack', 'prepare', 'prepublish',
-            'prepublishOnly', 'preuninstall', 'publish', 'uninstall',
+            'dependencies', 'install', 'postinstall', 'postpack', 'postprepare',
+            'postpublish', 'postuninstall', 'preinstall', 'prepack', 'preprepare',
+            'prepare', 'prepublish', 'prepublishOnly', 'preuninstall', 'publish',
+            'uninstall',
           ]);
           const unexpected = Object.keys(packageJson).filter((key) => !allowed.has(key));
           const unsafeScripts = Object.keys(packageJson.scripts ?? {}).filter((key) =>
@@ -467,9 +468,10 @@ jobs:
           ]);
           const unexpected = Object.keys(packageJson).filter((key) => !allowed.has(key));
           const lifecycle = new Set([
-            'dependencies', 'install', 'postinstall', 'postpack', 'postpublish',
-            'postuninstall', 'preinstall', 'prepack', 'prepare', 'prepublish',
-            'prepublishOnly', 'preuninstall', 'publish', 'uninstall',
+            'dependencies', 'install', 'postinstall', 'postpack', 'postprepare',
+            'postpublish', 'postuninstall', 'preinstall', 'prepack', 'preprepare',
+            'prepare', 'prepublish', 'prepublishOnly', 'preuninstall', 'publish',
+            'uninstall',
           ]);
           const unsafeScripts = Object.keys(packageJson.scripts ?? {}).filter((key) =>
             lifecycle.has(key)

@@ -403,7 +403,8 @@ jobs:
           gate_found=false
           for _ in $(seq 1 40); do
             checks=$(gh pr checks "$pr_url" \
-              --json bucket,name,workflow 2>/dev/null || printf '[]')
+              --json bucket,name,workflow 2>/dev/null || true)
+            checks=${checks:-[]}
             if jq -e \
               'any(.[]; .name == "Release gates" and .workflow == "Release gates")' \
               <<<"$checks" >/dev/null; then
@@ -417,6 +418,7 @@ jobs:
             exit 1
           fi
 
+          checked_head=$(gh pr view "$pr_url" --json headRefOid --jq '.headRefOid')
           gh pr checks "$pr_url" --watch --fail-fast --interval 30
           checks=$(gh pr checks "$pr_url" --json bucket,name,workflow)
           if ! jq -e \
@@ -425,8 +427,13 @@ jobs:
             echo 'The exact Release gates check did not pass' >&2
             exit 1
           fi
+          current_head=$(gh pr view "$pr_url" --json headRefOid --jq '.headRefOid')
+          if [[ "$current_head" != "$checked_head" ]]; then
+            echo 'Pull request head changed while checks were running' >&2
+            exit 1
+          fi
 
-          gh pr merge --merge "$pr_url"
+          gh pr merge --merge --match-head-commit "$checked_head" "$pr_url"
           echo "Merged after release gates: $pr_url"
 
   report-failure:

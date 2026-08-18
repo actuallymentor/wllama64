@@ -174,7 +174,14 @@ test('release package refuses automatic lifecycle scripts', () => {
     scripts: { build: 'build' },
   };
 
-  for (const script of ['preinstall', 'postinstall', 'prepack', 'prepare']) {
+  for (const script of [
+    'preinstall',
+    'postinstall',
+    'prepack',
+    'preprepare',
+    'prepare',
+    'postprepare',
+  ]) {
     assert.throws(
       () =>
         buildReleasePackage({
