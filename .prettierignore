@@ -4,6 +4,7 @@
 **/.svn
 **/.hg
 **/node_modules
+**/.cache
 **/dist
 **/docs
 
