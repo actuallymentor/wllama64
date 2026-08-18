@@ -157,6 +157,7 @@ jobs:
 
           const shouldPublish = packageResult.status === 404;
           let releaseCommit = process.env.GITHUB_SHA;
+          let recoveryDigest;
           if (!shouldPublish) {
             const response = await fetch(
               `https://registry.npmjs.org/-/npm/v1/attestations/${encodeURIComponent(packageJson.name)}@${encodeURIComponent(process.env.RELEASE_VERSION)}`,
@@ -205,6 +206,7 @@ jobs:
             ) {
               throw new Error('Published package provenance does not match this workflow');
             }
+            recoveryDigest = packageSubject.digest.sha512;
           }
 
           fs.appendFileSync(
@@ -222,7 +224,7 @@ jobs:
             );
             fs.appendFileSync(
               process.env.GITHUB_OUTPUT,
-              `recovery_digest=${packageSubject.digest.sha512}\n`
+              `recovery_digest=${recoveryDigest}\n`
             );
           }
           console.log(
