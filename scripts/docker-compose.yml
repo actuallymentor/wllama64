@@ -22,6 +22,9 @@ services:
         set -e
         cd /source
 
+        # Release artifacts must never inherit cached CMake state from an older build.
+        rm -rf build build-compat
+
         mkdir -p build
         cd build
         mkdir -p emdawn

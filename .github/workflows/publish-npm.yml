@@ -102,8 +102,20 @@ jobs:
       - name: Rebuild WebAssembly
         run: npm run build:wasm
 
+      - name: Verify rebuilt Wasm declarations
+        run: npm run check:wasm
+
       - name: Build package
         run: npm run build
+
+      - name: Preserve clean Wasm build
+        uses: actions/upload-artifact@v4
+        with:
+          name: wllama64-wasm-${{ github.sha }}-${{ github.run_attempt }}
+          path: src/wasm/wllama.wasm
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
       - name: Verify generated artifacts are committed
         run: git diff --exit-code
