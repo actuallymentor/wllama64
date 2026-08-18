@@ -6,6 +6,7 @@
 
 - Verify token-free publishing through the protected GitHub Actions workflow.
 - Rebuild release artifacts from clean CMake directories to prevent stale binaries.
+- Validate and test fresh Wasm builds semantically when equivalent exception encoding changes their bytes.
 
 ## [1.0.0-rc.1] - 2026-08-17
 

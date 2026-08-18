@@ -117,8 +117,11 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      - name: Verify generated artifacts are committed
-        run: git diff --exit-code
+      - name: Verify deterministic generated artifacts are committed
+        run: |
+          # Fresh Emscripten builds can encode equivalent exception regions differently.
+          # The rebuilt Wasm is validated above and exercised by every test below.
+          git diff --exit-code -- . ':(exclude)src/wasm/wllama.wasm'
 
       - name: Test Chromium
         run: npm run test:auto
@@ -136,7 +139,13 @@ jobs:
         run: npm run test:memory64:stress:unit
 
       - name: Run release checks
-        run: npm run release:check
+        run: |
+          npm run format:check
+          npm run check:wasm
+          npm run check:package
+
+      - name: Verify release tree stayed clean
+        run: git diff --exit-code -- . ':(exclude)src/wasm/wllama.wasm'
 
       - name: Pack and inspect publish artifact
         id: pack

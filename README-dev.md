@@ -29,6 +29,13 @@ regenerate worker code and source maps, then run the upstream and Memory64
 browser suites. Syncing never publishes automatically; tag and publish a new
 `wllama64` release only after validation.
 
+Fresh Emscripten 4.0.20 builds can encode equivalent exception-region nesting
+differently, so the Memory64 Wasm binary is not byte-reproducible across hosted
+runners. Release CI requires every deterministic generated file to remain clean,
+checks both Wasm memory declarations, runs browser inference and Memory64
+boundary tests against the fresh build, and publishes that tested build. It also
+retains the rebuilt Memory64 binary as a short-lived workflow artifact.
+
 ## Project structure
 
 The project has these directories:
