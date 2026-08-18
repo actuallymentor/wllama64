@@ -44,6 +44,7 @@
     "format:check": "prettier --check .",
     "check:wasm": "node scripts/check_wasm_memory.mjs",
     "check:package": "node scripts/check_package_size.js && node scripts/check_package_exports.mjs",
+    "check:release-automation": "node --test scripts/prepare_upstream_release.test.mjs",
     "release:check": "npm run build && npm run format:check && npm run check:wasm && npm run check:package",
     "test": "vitest",
     "test:auto": "AUTO=1 vitest",

@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased] - 2026-08-18
+
+### Changed
+
+- Automate guarded stable-tag sync, release gates, and npm trusted publishing.
+- Isolate untrusted builds from PAT and npm OIDC credentials.
+
 ## [1.0.0] - 2026-08-18
 
 ### Changed

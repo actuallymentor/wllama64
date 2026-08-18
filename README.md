@@ -219,8 +219,14 @@ Conflict resolutions preserve both upstream semantics and Memory64 support.
 For each upstream release, maintainers fetch the
 [`ngxson/wllama`](https://github.com/ngxson/wllama) remote, integrate the release
 commit, reapply the narrow Memory64 adaptations, regenerate both Wasm artifacts
-and worker glue, and run the upstream and Memory64 browser suites. Upstream syncs
-do not publish automatically; each becomes an explicit `wllama64` release.
+and worker glue, and run the upstream and Memory64 browser suites.
+
+The daily release watcher automates this flow for conflict-free stable tags. It
+opens a pull request, rebuilds both Wasm targets without credentials, and enables
+auto-merge only after the complete release gates pass. A merged release publishes
+through npm trusted publishing; conflicts or failed checks open an issue and
+never publish. Upstream patch, minor, and major releases produce the matching
+downstream version increment.
 
 ## How to compile the binary yourself
 

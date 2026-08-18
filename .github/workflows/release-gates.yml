@@ -1,0 +1,68 @@
+name: Release gates
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gates-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-gates:
+    name: Release gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies and browsers
+        run: |
+          npm ci --include=dev
+          npx playwright install --with-deps chromium firefox
+
+      - name: Rebuild and verify both WebAssembly targets
+        run: |
+          npm run build:wasm
+          npm run check:wasm
+          npm run build
+
+      - name: Require committed deterministic outputs
+        run: |
+          # Emscripten can encode equivalent exception regions differently.
+          # The fresh binary is semantically validated and tested below.
+          git diff --exit-code -- . ':(exclude)src/wasm/wllama.wasm'
+
+      - name: Run complete release gates
+        run: |
+          node scripts/check_debug_build.js
+          npm run check:release-automation
+          npm run test:auto
+          npm run test:firefox
+          npm run test:memory64
+          npm run test:compat
+          npm run test:memory64:stress:unit
+          npm run format:check
+          npm run check:wasm
+          npm run check:package
+
+      - name: Require clean release tree
+        run: git diff --exit-code -- . ':(exclude)src/wasm/wllama.wasm'
