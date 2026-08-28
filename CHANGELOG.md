@@ -8,6 +8,12 @@
 - Isolate untrusted builds from PAT and npm OIDC credentials.
 - Recover partial releases from npm provenance and reject unsafe package hooks.
 
+## [1.0.1] - 2026-08-28
+
+### Changed
+
+- Sync upstream Wllama 3.6.1 at [`e3972797`](https://github.com/ngxson/wllama/commit/e3972797f9d508887440e9d3fa87dc296f2dec44).
+- Rebuild and verify the Memory64 and wasm32 compatibility artifacts.
 ## [1.0.0] - 2026-08-18
 
 ### Changed

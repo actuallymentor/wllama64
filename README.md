@@ -7,8 +7,8 @@ the WebAssembly binding for [llama.cpp](https://github.com/ggerganov/llama.cpp).
 It keeps the upstream browser API while raising the default WebAssembly linear
 memory ceiling from 4 GiB to 16 GiB through Memory64.
 
-Current release: `1.0.0`, based on upstream Wllama `3.6.0`
-([`f16050d`](https://github.com/ngxson/wllama/commit/f16050d)).
+Current release: `1.0.1`, based on upstream Wllama `3.6.1`
+([`e3972797`](https://github.com/ngxson/wllama/commit/e3972797f9d508887440e9d3fa87dc296f2dec44)).
 
 - [Repository](https://github.com/actuallymentor/wllama64)
 - [Issues](https://github.com/actuallymentor/wllama64/issues)
@@ -213,7 +213,7 @@ const wllama = new Wllama(pathConfig, {
 ## Upstream tracking
 
 `wllama64` follows tested upstream Wllama release commits rather than arbitrary
-development snapshots. The current baseline is Wllama `3.6.0` at `f16050d`.
+development snapshots. The current baseline is Wllama `3.6.1` at `e3972797`.
 Conflict resolutions preserve both upstream semantics and Memory64 support.
 
 For each upstream release, maintainers fetch the
