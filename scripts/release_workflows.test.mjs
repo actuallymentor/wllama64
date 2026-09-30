@@ -24,6 +24,52 @@ const publishScript = publishStep
   .map((line) => (line.startsWith('          ') ? line.slice(10) : line))
   .join('\n');
 
+test('publish and recovery validators accept only the reviewed downloader override', () => {
+  const validators = [
+    ...workflow.matchAll(
+      /PACKAGE_MANIFEST="\$package_manifest" node --input-type=module <<'NODE'\n([\s\S]*?)          NODE/g
+    ),
+  ];
+  assert.equal(validators.length, 2);
+  const approvedOverrides = {
+    '@wdio/utils': { '@puppeteer/browsers': '3.2.3' },
+  };
+  const manifest = { name: 'wllama64', version: '0.0.0-test' };
+  for (const [, script] of validators) {
+    for (const overrides of [
+      undefined,
+      approvedOverrides,
+      null,
+      {},
+      { 'extract-zip': 'npm:other-package@1' },
+      { '@wdio/utils': { '@puppeteer/browsers': '3.2.4' } },
+      { ...approvedOverrides, extra: '1' },
+    ]) {
+      const result = spawnSync(
+        process.execPath,
+        ['--input-type=module', '--eval', script],
+        {
+          encoding: 'utf8',
+          timeout: 10_000,
+          env: {
+            PACKAGE_MANIFEST: JSON.stringify({
+              ...manifest,
+              ...(overrides === undefined ? {} : { overrides }),
+            }),
+            RELEASE_VERSION: manifest.version,
+          },
+        }
+      );
+      if (overrides === undefined || overrides === approvedOverrides) {
+        assert.equal(result.status, 0, result.stderr);
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /overrides require review/);
+      }
+    }
+  }
+});
+
 test('isolated publish step treats downloaded artifact as a local npm tarball', () => {
   const directory = mkdtempSync(join(tmpdir(), 'wllama-publish-'));
   try {
@@ -31,7 +77,11 @@ test('isolated publish step treats downloaded artifact as a local npm tarball', 
     mkdirSync(join(directory, 'release-artifact'));
     writeFileSync(
       join(directory, 'package/package.json'),
-      JSON.stringify({ name: 'wllama64', version: '0.0.0-test' })
+      JSON.stringify({
+        name: 'wllama64',
+        version: '0.0.0-test',
+        overrides: { '@wdio/utils': { '@puppeteer/browsers': '3.2.3' } },
+      })
     );
     execFileSync(
       'tar',

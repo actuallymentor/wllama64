@@ -344,7 +344,8 @@ jobs:
       - name: Upload generated release files
         uses: actions/upload-artifact@v7
         with:
-          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}-${{ github.run_attempt }}
+          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -383,7 +384,7 @@ jobs:
       - name: Download generated release files
         uses: actions/download-artifact@v8
         with:
-          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}-${{ github.run_attempt }}
+          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}
           path: .
 
       - name: Commit generated files and enable auto-merge

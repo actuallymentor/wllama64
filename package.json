@@ -109,5 +109,10 @@
     "semi": true,
     "singleQuote": true,
     "bracketSameLine": false
+  },
+  "overrides": {
+    "@wdio/utils": {
+      "@puppeteer/browsers": "3.2.3"
+    }
   }
 }

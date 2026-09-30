@@ -253,11 +253,16 @@ jobs:
           fi
           package_manifest=$(tar -xOf "$RUNNER_TEMP/recovery.tgz" package/package.json)
           PACKAGE_MANIFEST="$package_manifest" node --input-type=module <<'NODE'
+          import { isDeepStrictEqual } from 'node:util';
           const packageJson = JSON.parse(process.env.PACKAGE_MANIFEST);
+          const approvedOverrides = { '@wdio/utils': { '@puppeteer/browsers': '3.2.3' } };
+          if (Object.hasOwn(packageJson, 'overrides') && !isDeepStrictEqual(packageJson.overrides, approvedOverrides)) {
+            throw new Error('Package overrides require review');
+          }
           const allowed = new Set([
             'author', 'bugs', 'dependencies', 'description', 'devDependencies',
             'directories', 'exports', 'files', 'funding', 'homepage', 'keywords',
-            'license', 'main', 'module', 'name', 'optionalDependencies',
+            'license', 'main', 'module', 'name', 'optionalDependencies', 'overrides',
             'peerDependencies', 'peerDependenciesMeta', 'prettier', 'repository',
             'scripts', 'sideEffects', 'type', 'types', 'version', 'wllama64',
           ]);
@@ -462,7 +467,12 @@ jobs:
 
           package_manifest=$(tar -xOf "$tarball" package/package.json)
           PACKAGE_MANIFEST="$package_manifest" node --input-type=module <<'NODE'
+          import { isDeepStrictEqual } from 'node:util';
           const packageJson = JSON.parse(process.env.PACKAGE_MANIFEST);
+          const approvedOverrides = { '@wdio/utils': { '@puppeteer/browsers': '3.2.3' } };
+          if (Object.hasOwn(packageJson, 'overrides') && !isDeepStrictEqual(packageJson.overrides, approvedOverrides)) {
+            throw new Error('Package overrides require review');
+          }
           const allowed = new Set([
             'author',
             'bugs',
@@ -480,6 +490,7 @@ jobs:
             'module',
             'name',
             'optionalDependencies',
+            'overrides',
             'peerDependencies',
             'peerDependenciesMeta',
             'prettier',
@@ -604,6 +615,7 @@ jobs:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
       WLLAMA_PACKAGE_SPEC: wllama64@${{ needs.inspect.outputs.version }}
       WLLAMA_PACKAGE_CDN: '1'
+      NPM_CONFIG_PREFER_ONLINE: 'true'
 
     steps:
       - uses: actions/checkout@v7
@@ -676,4 +688,4 @@ jobs:
           gh issue create \
             --repo "$GITHUB_REPOSITORY" \
             --title "$title" \
-            --body "Automatic publish stopped safely. Inspect $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The workflow retries daily; npm OIDC remains isolated from build code."
+            --body "Release pipeline failed. The package may already be published. Inspect $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. The workflow retries daily; npm OIDC remains isolated from build code."

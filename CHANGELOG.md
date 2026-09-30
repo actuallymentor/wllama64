@@ -6,6 +6,7 @@
 
 - Publish the tested npm tarball using an explicit filesystem path.
 - Initialize isolated consumer projects for npm package checks.
+- Remove vulnerable archive extraction from the Safari test tooling with a scoped browser-downloader override.
 
 ### Changed
 

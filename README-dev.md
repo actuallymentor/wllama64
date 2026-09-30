@@ -53,6 +53,10 @@ checks both Wasm memory declarations, runs browser inference and Memory64
 boundary tests against the fresh build, and publishes that tested build. It also
 retains the rebuilt Memory64 binary as a short-lived workflow artifact.
 
+## Browser test dependencies
+
+The fork pins `@wdio/utils`'s `@puppeteer/browsers` dependency to `3.2.3` to remove the unpatched `extract-zip` dependency. This scoped override retains WebDriverIO 9 and its Safari provider; Node 24 meets the downloader's ESM and Node requirements. Release checks accept only this exact override from the fork and reject upstream overrides. Remove the override and its validation exception when WebDriverIO adopts a fixed downloader, then rerun browser tests and `npm audit`.
+
 ## Project structure
 
 The project has these directories:

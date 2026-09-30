@@ -201,6 +201,17 @@ export const buildReleasePackage = ({
   // dependencies, and unchanged scripts still flow through from the new tag.
   copyFields(result, forkPackage, FORK_FIELDS);
 
+  // Retain only the reviewed browser-download security override from the fork.
+  if (Object.hasOwn(forkPackage, 'overrides')) {
+    const approvedOverrides = {
+      '@wdio/utils': { '@puppeteer/browsers': '3.2.3' },
+    };
+    if (!isDeepStrictEqual(forkPackage.overrides, approvedOverrides)) {
+      throw new Error('Package overrides require review');
+    }
+    result.overrides = structuredClone(approvedOverrides);
+  }
+
   for (const field of MERGED_MAP_FIELDS) {
     result[field] = mergePackageMap({
       previous: previousUpstreamPackage[field],
