@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -6,6 +7,29 @@ import {
   mergePackageMap,
   nextDownstreamVersion,
 } from './prepare_upstream_release.mjs';
+
+test('release preparation accepts the actual root manifest override', () => {
+  const forkPackage = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+  );
+  const previousUpstreamPackage = {
+    name: '@wllama/wllama',
+    version: forkPackage.wllama64.upstreamVersion,
+  };
+  const [major, minor, patch] = previousUpstreamPackage.version
+    .split('.')
+    .map(Number);
+  const result = buildReleasePackage({
+    forkPackage,
+    previousUpstreamPackage,
+    nextUpstreamPackage: {
+      ...previousUpstreamPackage,
+      version: `${major}.${minor}.${patch + 1}`,
+    },
+    upstreamCommit: 'next',
+  });
+  assert.deepEqual(result.overrides, forkPackage.overrides);
+});
 
 test('release package retains only the reviewed fork downloader override', () => {
   const approvedOverrides = {

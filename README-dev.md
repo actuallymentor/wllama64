@@ -55,7 +55,9 @@ retains the rebuilt Memory64 binary as a short-lived workflow artifact.
 
 ## Browser test dependencies
 
-The fork pins `@wdio/utils`'s `@puppeteer/browsers` dependency to `3.2.3` to remove the unpatched `extract-zip` dependency. This scoped override retains WebDriverIO 9 and its Safari provider; Node 24 meets the downloader's ESM and Node requirements. Release checks accept only this exact override from the fork and reject upstream overrides. Remove the override and its validation exception when WebDriverIO adopts a fixed downloader, then rerun browser tests and `npm audit`.
+The fork pins `@wdio/utils`'s `@puppeteer/browsers` dependency to `3.2.3` to remove the unpatched `extract-zip` dependency. This scoped override retains WebDriverIO 9 and its Safari provider; Node 24 meets the downloader's ESM and Node requirements. Release checks accept only this exact override from the fork and reject upstream overrides. Remove the override and its validation exception when WebDriverIO adopts a fixed downloader, then rerun browser tests and `npm audit`. Change or remove the pin only in a new release version: recovery validates the historical published tarball against the current validator.
+
+Browser downloads through this downloader need system `unzip` on Linux/macOS (or its optional `yauzl` dependency); Windows uses `tar.exe` or PowerShell. Install the optional `proxy-agent` peer (version 8.0.1 or newer) when downloads must honor `HTTPS_PROXY`. These are test-tool requirements, not browser inference dependencies.
 
 ## Project structure
 

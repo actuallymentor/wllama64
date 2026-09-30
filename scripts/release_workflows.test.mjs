@@ -24,12 +24,35 @@ const publishScript = publishStep
   .map((line) => (line.startsWith('          ') ? line.slice(10) : line))
   .join('\n');
 
+const validators = [
+  ...workflow.matchAll(
+    /PACKAGE_MANIFEST="\$package_manifest" node --input-type=module <<'NODE'\n([\s\S]*?)          NODE/g
+  ),
+];
+
+test('publish and recovery validators accept the actual root manifest', () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+  );
+  assert.equal(validators.length, 2);
+  for (const [, script] of validators) {
+    const result = spawnSync(
+      process.execPath,
+      ['--input-type=module', '--eval', script],
+      {
+        encoding: 'utf8',
+        timeout: 10_000,
+        env: {
+          PACKAGE_MANIFEST: JSON.stringify(manifest),
+          RELEASE_VERSION: manifest.version,
+        },
+      }
+    );
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
+
 test('publish and recovery validators accept only the reviewed downloader override', () => {
-  const validators = [
-    ...workflow.matchAll(
-      /PACKAGE_MANIFEST="\$package_manifest" node --input-type=module <<'NODE'\n([\s\S]*?)          NODE/g
-    ),
-  ];
   assert.equal(validators.length, 2);
   const approvedOverrides = {
     '@wdio/utils': { '@puppeteer/browsers': '3.2.3' },

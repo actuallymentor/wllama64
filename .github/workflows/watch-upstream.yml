@@ -490,6 +490,7 @@ jobs:
     if: >-
       ${{
         always() &&
+        inputs.dry_run != true &&
         (needs.prepare.result == 'failure' ||
           needs.generate.result == 'failure' ||
           needs.finalize.result == 'failure')
