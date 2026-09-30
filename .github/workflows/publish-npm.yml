@@ -33,7 +33,7 @@ concurrency:
 jobs:
   inspect:
     name: Inspect release
-    if: github.ref_name == 'main'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -292,7 +292,7 @@ jobs:
     needs: inspect
     if: needs.inspect.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       contents: read
     outputs:
@@ -344,6 +344,23 @@ jobs:
           npm run check:wasm
           npm run check:package
 
+      - name: Require real >4 GiB model inference
+        env:
+          WLLAMA_STRESS_CASES: 4g
+          WLLAMA_STRESS_THREADS: '1'
+          WLLAMA_STRESS_TWO_PHASE: '1'
+          WLLAMA_STRESS_ARTIFACTS: ${{ runner.temp }}/memory64-release-results
+        run: node scripts/memory64_stress.mjs
+
+      - name: Retain large-model release evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory64-release-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/memory64-release-results
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Verify release tree stayed clean
         run: git diff --exit-code -- . ':(exclude)src/wasm/wllama.wasm'
 
@@ -376,10 +393,16 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `tarball=${pack.filename}\n`);
           NODE
 
+      - name: Run inference from the exact publish tarball
+        env:
+          WLLAMA_PACKAGE_SPEC: ${{ github.workspace }}/${{ steps.pack.outputs.tarball }}
+        run: npm run test:package
+
       - name: Upload exact npm tarball
         uses: actions/upload-artifact@v7
         with:
-          name: npm-package-${{ needs.inspect.outputs.version }}-${{ github.run_attempt }}
+          name: npm-package-${{ needs.inspect.outputs.version }}
+          overwrite: true
           path: ${{ steps.pack.outputs.tarball }}
           if-no-files-found: error
           retention-days: 7
@@ -410,7 +433,7 @@ jobs:
       - name: Download exact tested tarball
         uses: actions/download-artifact@v8
         with:
-          name: npm-package-${{ needs.inspect.outputs.version }}-${{ github.run_attempt }}
+          name: npm-package-${{ needs.inspect.outputs.version }}
           path: release-artifact
 
       - name: Inspect and publish without lifecycle scripts
@@ -427,7 +450,7 @@ jobs:
             exit 1
           fi
 
-          tarball="${tarballs[0]}"
+          tarball=$(realpath -- "${tarballs[0]}")
           package_name=$(tar -xOf "$tarball" package/package.json | node -p \
             "JSON.parse(require('fs').readFileSync(0, 'utf8')).name")
           package_version=$(tar -xOf "$tarball" package/package.json | node -p \
@@ -567,6 +590,46 @@ jobs:
             --generate-notes \
             --verify-tag
 
+  verify-published:
+    name: Verify live npm package and CDN inference
+    needs:
+      - inspect
+      - release
+    if: always() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      WLLAMA_PACKAGE_SPEC: wllama64@${{ needs.inspect.outputs.version }}
+      WLLAMA_PACKAGE_CDN: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Install test dependencies and browser
+        run: |
+          npm ci --include=dev
+          npx playwright install --with-deps chromium
+      - name: Verify registry and CDN propagation with bounded retries
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if timeout 240s npm run test:package; then
+              exit 0
+            fi
+            if [[ "$attempt" != 5 ]]; then
+              sleep 30
+            fi
+          done
+          echo 'Published npm/CDN inference failed after five attempts' >&2
+          exit 1
+
   report-failure:
     name: Report release failure
     needs:
@@ -574,13 +637,15 @@ jobs:
       - build
       - publish
       - release
+      - verify-published
     if: >-
       ${{
         always() &&
         (needs.inspect.result == 'failure' ||
           needs.build.result == 'failure' ||
           needs.publish.result == 'failure' ||
-          needs.release.result == 'failure')
+          needs.release.result == 'failure' ||
+          needs.verify-published.result == 'failure')
       }}
     runs-on: ubuntu-latest
     permissions:

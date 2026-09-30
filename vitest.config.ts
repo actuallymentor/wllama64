@@ -17,7 +17,17 @@ const chromeArgsWebGPU = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
   '--enable-unsafe-webgpu',
-  '--enable-features=WebGPU',
+  process.env.WEBGPU_VULKAN === '1'
+    ? '--enable-features=WebGPU,Vulkan'
+    : '--enable-features=WebGPU',
+  ...(process.env.WEBGPU_VULKAN === '1'
+    ? [
+        '--use-angle=vulkan',
+        '--use-vulkan=native',
+        '--disable-vulkan-surface',
+        '--enable-dawn-features=allow_unsafe_apis',
+      ]
+    : []),
 ];
 
 const browserName = process.env.BROWSER ?? 'chromium';
@@ -25,7 +35,14 @@ const browserProvider = SAFARI
   ? webdriverio()
   : playwright({
       launchOptions: {
-        args: WEBGPU ? chromeArgsWebGPU : CI ? chromeArgsCI : [],
+        args:
+          browserName === 'chromium'
+            ? WEBGPU
+              ? chromeArgsWebGPU
+              : CI
+                ? chromeArgsCI
+                : []
+            : [],
       },
     });
 
@@ -35,6 +52,7 @@ export default defineConfig({
   },
   test: {
     ...(AUTO ? { watch: false } : {}),
+    ...(WEBGPU ? { testTimeout: 120_000 } : {}),
     exclude: [
       '**/node_modules/**',
       '**/esm/**',

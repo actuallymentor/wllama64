@@ -323,7 +323,7 @@ test.sequential(
 
     await wllama.exit();
   },
-  30_000
+  120_000
 );
 
 test.sequential('allowOffline', async () => {

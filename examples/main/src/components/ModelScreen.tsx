@@ -225,7 +225,8 @@ function AddCustomModelDialog({ onClose }: { onClose(): void }) {
       <div className="modal-box">
         <h3 className="font-bold text-lg">Add custom GGUF</h3>
         <div className="mt-4">
-          Max GGUF file size is 2GB. If your model is bigger than 2GB, please{' '}
+          Compatibility mode and constrained browsers may require GGUF files
+          larger than 2 GiB to be split. If needed,{' '}
           <a
             href="https://github.com/actuallymentor/wllama64?tab=readme-ov-file#split-model"
             target="_blank"

@@ -1,0 +1,105 @@
+name: Extended runtime validation
+
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - package.json
+      - src/**
+      - cpp/**
+      - llama.cpp
+      - examples/memory64/**
+      - scripts/memory64_stress*
+      - .github/workflows/extended-runtime.yml
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Linux runner label (use a configured high-memory runner for 8g/12g)
+        type: string
+        default: ubuntu-latest
+      gpu_runner:
+        description: Configured Linux GPU runner label (empty uses WEBGPU_RUNNER, or skips GPU validation)
+        type: string
+        default: ''
+      cases:
+        description: Real GGUF fixtures
+        type: choice
+        default: 4g
+        options: [4g, '4g,8g,12g']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extended-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  large-model:
+    name: Real >4 GiB inference (${{ matrix.threads }} threads)
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        threads: [1, 2]
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      WLLAMA_STRESS_CASES: ${{ inputs.cases || '4g' }}
+      WLLAMA_STRESS_THREADS: ${{ matrix.threads }}
+      WLLAMA_STRESS_TWO_PHASE: '1'
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Install dependencies and browser
+        run: |
+          npm ci --include=dev
+          npx playwright install --with-deps chromium
+      - name: Generate tokens with physically resident large models
+        env:
+          WLLAMA_STRESS_ARTIFACTS: ${{ runner.temp }}/memory64-results
+        run: npm run test:memory64:stress
+      - name: Retain browser and memory evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory64-${{ matrix.threads }}-threads-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/memory64-results
+          if-no-files-found: error
+          retention-days: 14
+
+  webgpu:
+    name: Real WebGPU inference
+    if: ${{ inputs.gpu_runner != '' || vars.WEBGPU_RUNNER != '' }}
+    runs-on: ${{ inputs.gpu_runner || vars.WEBGPU_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    env:
+      WEBGPU_VULKAN: '1'
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Install dependencies and browser
+        run: |
+          npm ci --include=dev
+          npx playwright install --with-deps chromium
+      - name: Build and require native GPU offload
+        run: |
+          npm run build
+          npm run test:wgpu
