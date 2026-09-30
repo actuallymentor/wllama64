@@ -27,7 +27,7 @@ export class DisplayedModel {
     this.size = size;
     this.isUserAdded = isUserAdded;
     this.modalities = modalities;
-    this.state = !!cachedModel ? ModelState.READY : ModelState.NOT_DOWNLOADED;
+    this.state = cachedModel ? ModelState.READY : ModelState.NOT_DOWNLOADED;
     this.cachedModel = cachedModel;
   }
 
@@ -71,7 +71,7 @@ export function getUserAddedModels(cachedModels: Model[]): DisplayedModel[] {
     'custom_models',
     []
   );
-  return userAddedModels.map((m: any) => {
+  return userAddedModels.map((m) => {
     const cachedModel = cachedModels.find((cm) => cm.url === m.url);
     return new DisplayedModel(m.url, m.size, true, cachedModel, m.mmprojUrl);
   });

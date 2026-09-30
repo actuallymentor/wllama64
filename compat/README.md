@@ -4,8 +4,7 @@ Official upstream package that provides wasm32 compatibility assets for
 `wllama64` on browsers that lack
 [JSPI](https://github.com/WebAssembly/js-promise-integration) or
 [Memory64](https://github.com/WebAssembly/memory64) support—most notably Safari
-and older browsers. `wllama64` pins these assets to upstream version `3.6.0`; it
-does not publish a separate compat package.
+and older browsers. `wllama64` pins these assets to `wllama64.compatVersion` in its package metadata; it does not publish a separate compat package.
 
 ## Why this package exists
 
@@ -61,7 +60,7 @@ wllama.setCompat(null);
 **You only need to install package if you want to store compat assets locally**. By default, assets are pulled from CDN.
 
 ```bash
-npm install @wllama/wllama-compat@3.6.0
+npm install "@wllama/wllama-compat@$(node -p "require('wllama64/package.json').wllama64.compatVersion")"
 ```
 
 Then copy the assets from `node_modules/@wllama/wllama-compat/wasm/` to your public directory and call `setCompat()` with the URLs pointing to those files:

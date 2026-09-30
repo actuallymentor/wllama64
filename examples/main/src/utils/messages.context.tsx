@@ -1,4 +1,10 @@
-import { createContext, useContext, useMemo, useState } from 'react';
+import {
+  createContext,
+  type ReactNode,
+  useContext,
+  useMemo,
+  useState,
+} from 'react';
 import { Conversation, Message } from './types';
 import { WllamaStorage } from './utils';
 
@@ -15,11 +21,13 @@ interface MessagesContextValue {
   ) => void;
 }
 
-const MessagesContext = createContext<MessagesContextValue>({} as any);
+const MessagesContext = createContext<MessagesContextValue | undefined>(
+  undefined
+);
 
 type ConvMap = { [id: number]: Conversation };
 
-export const MessagesProvider = ({ children }: any) => {
+export const MessagesProvider = ({ children }: { children: ReactNode }) => {
   const [conversations, _setConversations] = useState<ConvMap>(
     WllamaStorage.load('conversations', {})
   );
@@ -117,4 +125,10 @@ export const MessagesProvider = ({ children }: any) => {
   );
 };
 
-export const useMessages = () => useContext(MessagesContext);
+export const useMessages = () => {
+  const context = useContext(MessagesContext);
+  if (!context) {
+    throw new Error('useMessages must be used inside MessagesProvider');
+  }
+  return context;
+};

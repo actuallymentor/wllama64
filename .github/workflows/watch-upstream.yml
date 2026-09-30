@@ -6,6 +6,10 @@ on:
     - cron: '17 6 * * *'
   workflow_dispatch:
     inputs:
+      reviewed_upstream_commit:
+        description: Exact upstream commit whose preserved infrastructure changes were reviewed and ported
+        required: false
+        type: string
       dry_run:
         description: Verify access and report the next release without changing GitHub
         required: false
@@ -36,7 +40,7 @@ jobs:
 
     steps:
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -44,7 +48,7 @@ jobs:
           submodules: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
@@ -67,6 +71,7 @@ jobs:
       - name: Integrate latest stable upstream tag
         id: integrate
         env:
+          REVIEWED_UPSTREAM_COMMIT: ${{ inputs.reviewed_upstream_commit }}
           DRY_RUN: ${{ inputs.dry_run || false }}
           GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
           UPSTREAM_REPOSITORY: ngxson/wllama
@@ -126,6 +131,36 @@ jobs:
           if git ls-tree -r --name-only "$latest_commit" | grep -Eq '(^|/)\.npmrc$'; then
             echo "Upstream $latest_tag contains npm configuration; manual review required" >&2
             exit 1
+          fi
+          # Review fork-owned source before restoring it over upstream changes.
+          review_paths=(
+            .github .gitignore .npmignore .nvmrc CHANGELOG.md README.md README-dev.md
+            compat/README.md examples/main scripts/check_package_exports.mjs
+            scripts/check_package_size.js scripts/check_wasm_memory.mjs
+            scripts/generate_wasm_from_cdn.js scripts/post_build.sh
+            scripts/prepare_upstream_release.mjs scripts/prepare_upstream_release.test.mjs
+          )
+          review_report="$RUNNER_TEMP/upstream-infrastructure.patch"
+          git diff --binary "$current_commit" "$latest_commit" -- "${review_paths[@]}" > "$review_report"
+          if [[ -s "$review_report" ]]; then
+            {
+              echo '## Upstream infrastructure review required'
+              echo "Changes from $current_tag to $latest_tag affect fork-owned files."
+              echo 'Review the uploaded patch, port applicable fixes, then dispatch with reviewed_upstream_commit.'
+              echo '```text'
+              git diff --stat "$current_commit" "$latest_commit" -- "${review_paths[@]}"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo 'infrastructure_changed=true' >&3
+            if [[ "$REVIEWED_UPSTREAM_COMMIT" == "$latest_commit" ]]; then
+              echo "Preserved infrastructure review acknowledged for $latest_commit"
+            elif [[ "$DRY_RUN" == 'true' ]]; then
+              echo 'Dry run: infrastructure review would block this sync'
+              exit 0
+            else
+              echo 'Upstream infrastructure changed; refusing to discard it automatically' >&2
+              exit 1
+            fi
           fi
           if [[ "$DRY_RUN" == 'true' ]]; then
             echo "Dry run: would prepare upstream $latest_tag at $latest_commit"
@@ -241,6 +276,15 @@ jobs:
           git push --set-upstream origin "$branch"
           echo 'changed=true' >&3
 
+      - name: Retain upstream infrastructure review
+        if: always() && steps.integrate.outputs.infrastructure_changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: upstream-infrastructure-review-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/upstream-infrastructure.patch
+          if-no-files-found: ignore
+          retention-days: 30
+
   generate:
     name: Rebuild generated artifacts
     needs: prepare
@@ -254,7 +298,7 @@ jobs:
 
     steps:
       - name: Checkout sync branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -262,7 +306,7 @@ jobs:
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
@@ -298,9 +342,10 @@ jobs:
           git diff --exit-code origin/main -- .github
 
       - name: Upload generated release files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}-${{ github.run_attempt }}
+          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}
+          overwrite: true
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -322,14 +367,14 @@ jobs:
       - generate
     if: needs.prepare.outputs.changed == 'true' && needs.generate.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 140
+    timeout-minutes: 200
     permissions:
       contents: write
       pull-requests: write
 
     steps:
       - name: Checkout sync branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -337,9 +382,9 @@ jobs:
           submodules: false
 
       - name: Download generated release files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
-          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}-${{ github.run_attempt }}
+          name: upstream-generated-${{ needs.prepare.outputs.upstream_version }}
           path: .
 
       - name: Commit generated files and enable auto-merge
@@ -445,6 +490,7 @@ jobs:
     if: >-
       ${{
         always() &&
+        inputs.dry_run != true &&
         (needs.prepare.result == 'failure' ||
           needs.generate.result == 'failure' ||
           needs.finalize.result == 'failure')

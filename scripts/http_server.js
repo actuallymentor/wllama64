@@ -1,6 +1,5 @@
 import express from 'express';
 import path from 'path';
-import mime from 'mime-types';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 

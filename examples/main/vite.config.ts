@@ -1,9 +1,10 @@
 /// <reference types="node" />
-import { defineConfig } from 'vite';
+import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { defineConfig } from 'vite';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -21,6 +22,7 @@ const compatAvailable = existsSync(COMPAT_WASM) && existsSync(COMPAT_JS);
 export default defineConfig({
   base: './',
   plugins: [
+    tailwindcss(),
     react(),
     {
       name: 'wllama-compat',

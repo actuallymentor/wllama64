@@ -13,6 +13,9 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
@@ -34,15 +37,16 @@ jobs:
       fail-fast: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Check for debug build
         run: node scripts/check_debug_build.js
 
       - name: Set node version to ${{ matrix.node_version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node_version }}
 
@@ -56,20 +60,18 @@ jobs:
         run: npm run build
 
       - name: Test (Chrome)
-        run: npm run test
+        run: npm run test:auto
 
       - name: Test (Firefox)
         run: npm run test:firefox
 
-  # TODO: add test for WebGPU on github hosted runner ; current missing ShaderF16 support
-
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup NodeJS
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 

@@ -16,8 +16,9 @@ export interface LoadModelParams {
   // share one KV cache of n_ctx tokens between all sequences (default: true)
   // when disabled, each sequence gets its own cache of (n_ctx / n_parallel) tokens
   kv_unified?: boolean;
-  pooling_type?: // legacy values
-  | 'LLAMA_POOLING_TYPE_UNSPECIFIED'
+  pooling_type?:
+    // legacy values
+    | 'LLAMA_POOLING_TYPE_UNSPECIFIED'
     | 'LLAMA_POOLING_TYPE_NONE'
     | 'LLAMA_POOLING_TYPE_MEAN'
     | 'LLAMA_POOLING_TYPE_CLS'

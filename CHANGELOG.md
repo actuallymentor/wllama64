@@ -1,19 +1,26 @@
 # Changelog
 
-## [Unreleased] - 2026-08-18
+## [1.0.1] - 2026-09-30
 
-### Changed
+### Fixed
 
-- Automate guarded stable-tag sync, release gates, and npm trusted publishing.
-- Isolate untrusted builds from PAT and npm OIDC credentials.
-- Recover partial releases from npm provenance and reject unsafe package hooks.
-
-## [1.0.1] - 2026-08-28
+- Publish the tested npm tarball using an explicit filesystem path.
+- Initialize isolated consumer projects for npm package checks.
+- Remove the vulnerable `extract-zip` dependency from the Safari test tooling with a scoped browser-downloader override.
 
 ### Changed
 
 - Sync upstream Wllama 3.6.1 at [`e3972797`](https://github.com/ngxson/wllama/commit/e3972797f9d508887440e9d3fa87dc296f2dec44).
 - Rebuild and verify the Memory64 and wasm32 compatibility artifacts.
+- Test installed ESM/minified bundles and the published compatibility fallback with real inference.
+- Add quantized KV-cache inference and scheduled large-model/WebGPU validation.
+- Require review when upstream changes fork-owned infrastructure.
+- Automate guarded stable-tag sync, release gates, and npm trusted publishing.
+- Isolate untrusted builds from PAT and npm OIDC credentials.
+- Recover partial releases from npm provenance and reject unsafe package hooks.
+- Refresh browser tests, build tooling, and GitHub Actions runtimes.
+- Migrate the demo to React 19, Vite 8, Tailwind CSS 4, and ESLint 10.
+
 ## [1.0.0] - 2026-08-18
 
 ### Changed

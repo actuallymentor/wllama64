@@ -17,20 +17,20 @@ jobs:
   release-gates:
     name: Release gates
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:
       - name: Checkout candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
 
@@ -63,6 +63,24 @@ jobs:
           npm run format:check
           npm run check:wasm
           npm run check:package
+          npm run test:package
+
+      - name: Require real >4 GiB model inference
+        env:
+          WLLAMA_STRESS_CASES: 4g
+          WLLAMA_STRESS_THREADS: '1'
+          WLLAMA_STRESS_TWO_PHASE: '1'
+          WLLAMA_STRESS_ARTIFACTS: ${{ runner.temp }}/memory64-release-results
+        run: node scripts/memory64_stress.mjs
+
+      - name: Retain large-model release evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory64-release-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/memory64-release-results
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Require clean release tree
         run: git diff --exit-code -- . ':(exclude)src/wasm/wllama.wasm'

@@ -8,8 +8,12 @@ import {
   faCheck,
 } from '@fortawesome/free-solid-svg-icons';
 import { DEFAULT_INFERENCE_PARAMS, MAX_GGUF_SIZE } from '../config';
-import { toHumanReadableSize, useDebounce } from '../utils/utils';
-import { useEffect, useState } from 'react';
+import {
+  getErrorMessage,
+  toHumanReadableSize,
+  useDebounce,
+} from '../utils/utils';
+import { type ChangeEvent, useState } from 'react';
 import ScreenWrapper from './ScreenWrapper';
 import { DisplayedModel } from '../utils/displayed-model';
 import { isValidGgufFile } from 'wllama64';
@@ -28,9 +32,10 @@ export default function ModelScreen() {
 
   const blockModelBtn = !!(loadedModel || isDownloading || isLoadingModel);
 
-  const onChange = (key: keyof typeof currParams) => (e: any) => {
-    setParams({ ...currParams, [key]: parseFloat(e.target.value || -1) });
-  };
+  const onChange =
+    (key: keyof typeof currParams) => (e: ChangeEvent<HTMLInputElement>) => {
+      setParams({ ...currParams, [key]: parseFloat(e.target.value || '-1') });
+    };
 
   return (
     <ScreenWrapper>
@@ -190,25 +195,16 @@ function AddCustomModelDialog({ onClose }: { onClose(): void }) {
           setHfModelFiles([]);
           setHfMmprojFiles([]);
         }
-      } catch (e) {
-        if ((e as Error).name !== 'AbortError') {
-          setErr((e as any)?.message ?? 'unknown error');
-          setHfModelFiles([]);
-          setHfMmprojFiles([]);
-        }
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') return;
+        setErr(getErrorMessage(error, 'unknown error'));
+        setHfModelFiles([]);
+        setHfMmprojFiles([]);
       }
     },
     [hfRepo],
     500
   );
-
-  useEffect(() => {
-    if (hfModelFiles.length === 0) setHfFile('');
-  }, [hfModelFiles]);
-
-  useEffect(() => {
-    if (hfMmprojFiles.length === 0) setHfMmprojFile('');
-  }, [hfMmprojFiles]);
 
   const hfBase = `https://huggingface.co/${hfRepo}/resolve/main`;
 
@@ -219,8 +215,8 @@ function AddCustomModelDialog({ onClose }: { onClose(): void }) {
         hfMmprojFile ? `${hfBase}/${hfMmprojFile}` : undefined
       );
       onClose();
-    } catch (e) {
-      setErr((e as any)?.message ?? 'unknown error');
+    } catch (error) {
+      setErr(getErrorMessage(error, 'unknown error'));
     }
   };
 
@@ -229,7 +225,8 @@ function AddCustomModelDialog({ onClose }: { onClose(): void }) {
       <div className="modal-box">
         <h3 className="font-bold text-lg">Add custom GGUF</h3>
         <div className="mt-4">
-          Max GGUF file size is 2GB. If your model is bigger than 2GB, please{' '}
+          Compatibility mode and constrained browsers may require GGUF files
+          larger than 2 GiB to be split. If needed,{' '}
           <a
             href="https://github.com/actuallymentor/wllama64?tab=readme-ov-file#split-model"
             target="_blank"
@@ -251,6 +248,8 @@ function AddCustomModelDialog({ onClose }: { onClose(): void }) {
               onChange={(e) => {
                 abortSignal.abort();
                 setHfRepo(e.target.value);
+                setHfFile('');
+                setHfMmprojFile('');
                 setAbortSignal(new AbortController());
               }}
             />

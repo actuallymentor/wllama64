@@ -28,8 +28,7 @@ upstream sync, rebuild the default Memory64 and wasm32 compatibility artifacts,
 regenerate worker code and source maps, then run the upstream and Memory64
 browser suites.
 
-`.github/workflows/watch-upstream.yml` checks stable tags daily. A conflict-free
-sync gets a versioned pull request and fresh generated artifacts. GitHub merges
+`.github/workflows/watch-upstream.yml` checks stable tags daily. A conflict-free sync with no changes to fork-owned upstream infrastructure gets a versioned pull request and fresh generated artifacts. Changes to preserved source, workflows, or docs stop synchronization and upload a patch for review. GitHub merges
 only after `Release gates` passes, then `.github/workflows/publish-npm.yml`
 rebuilds and tests without credentials and hands the exact tarball to an isolated
 npm OIDC job. Conflicts, concurrent package-map changes, missing compat releases,
@@ -53,6 +52,12 @@ runners. Release CI requires every deterministic generated file to remain clean,
 checks both Wasm memory declarations, runs browser inference and Memory64
 boundary tests against the fresh build, and publishes that tested build. It also
 retains the rebuilt Memory64 binary as a short-lived workflow artifact.
+
+## Browser test dependencies
+
+The fork pins `@wdio/utils`'s `@puppeteer/browsers` dependency to `3.2.3` to remove the unpatched `extract-zip` dependency. This scoped override retains WebDriverIO 9 and its Safari provider; Node 24 meets the downloader's ESM and Node requirements. Release checks accept only this exact override from the fork and reject upstream overrides. Remove the override and its validation exception when WebDriverIO adopts a fixed downloader, then rerun browser tests and `npm audit`. Change or remove the pin only in a new release version: recovery validates the historical published tarball against the current validator.
+
+Browser downloads through this downloader need system `unzip` on Linux/macOS (or its optional `yauzl` dependency); Windows uses `tar.exe` or PowerShell. Install the optional `proxy-agent` peer (version 8.0.1 or newer) when downloads must honor `HTTPS_PROXY`. These are test-tool requirements, not browser inference dependencies.
 
 ## Project structure
 
@@ -333,3 +338,26 @@ To use the proof-of-concept manually, build the browser package, run
 `http://localhost:8080/examples/memory64/`. The page includes the same model
 presets and mirrors package logs while the browser developer console remains
 the source of truth.
+
+## Browser tests in Docker
+
+If Firefox reports `browserContext.newPage` with `_page` and its debug logs show failed content subprocess launches, the container blocks the Firefox content sandbox. Use `MOZ_DISABLE_CONTENT_SANDBOX=1 npm run test:firefox` only in that isolated container. Hosted CI keeps the browser sandbox enabled.
+
+Run `npm run test:wgpu` on a machine with a WebGPU adapter that supports `shader-f16`. The suite requires native GPU layer offload and generated text; CPU fallback does not pass. Current hosted software adapters do not meet this requirement.
+
+On Linux Vulkan drivers, use `WEBGPU_VULKAN=1 npm run test:wgpu`. Docker needs `/dev/dri` passed through and a Vulkan driver such as `mesa-vulkan-drivers`. This path was validated on Intel Gen12LP with Mesa 22.3.6. Chromium SwiftShader lacks `shader-f16` and cannot validate this backend.
+
+## Release validation
+
+- `npm run test:package`: install the packed package in a fresh project; test ESM/CJS exports, then run ESM/minified inference with Memory64 and the published upstream CDN fallback.
+- `WLLAMA_PACKAGE_SPEC=wllama64@1.0.1 WLLAMA_PACKAGE_CDN=1 npm run test:package`: verify the published package and both CDN paths after release.
+- `npm run test:wgpu`: require a WebGPU adapter and real layer offload; a CPU-only fallback does not pass.
+- Extended runtime Actions cover a real >4 GiB model with one and two threads. Manual runs can select larger fixtures and a suitable runner.
+
+Upstream 3.6.1 stopped committing Wasm binaries. This fork retains them for source consumers, but release gates rebuild both targets from clean CMake directories. Upstream build caches are deliberately not reused. Changes to fork-owned upstream infrastructure require review before synchronization continues.
+
+To enable recurring WebGPU validation, register a Linux GPU Actions runner with a unique label and set the repository variable `WEBGPU_RUNNER` to that label. The runner needs Vulkan GPU drivers (for example, `mesa-vulkan-drivers`), access to `/dev/dri` render devices, `shader-f16`, and permission to install browser dependencies. The Linux GPU job uses `WEBGPU_VULKAN=1`; use `WEBGPU_VULKAN=1 npm run test:wgpu` to reproduce it locally. Alternatively, enter its label as `gpu_runner` when dispatching Extended runtime validation. Without either setting, only the GPU job is skipped; large-model CPU jobs continue on hosted runners.
+
+Release gates and publish builds also require single-threaded inference with the real 4.36 GiB fixture. The publish workflow verifies the live npm version and both CDN runtime paths after publication, with bounded retries for propagation. A failed live check opens the release failure report; it cannot unpublish an already released version.
+
+For an upstream infrastructure review block, download the workflow patch, port applicable fixes, then dispatch Watch upstream releases with `reviewed_upstream_commit` set to the exact 40-character upstream commit reviewed. The acknowledgement applies only to that commit. Dry runs report review blocks without attempting integration.

@@ -59,14 +59,17 @@ export default function ChatScreen() {
     const media = pendingMedia;
     setInput('');
     setPendingMedia(null);
+    // Event handlers are allowed to read time; this does not run during render.
+    // eslint-disable-next-line react-hooks/purity
+    const messageId = Date.now();
     const userMsg: Message = {
-      id: Date.now(),
+      id: messageId,
       content: userInput,
       role: 'user',
       mediaData: media ?? undefined,
     };
     const assistantMsg: Message = {
-      id: Date.now() + 1,
+      id: messageId + 1,
       content: '',
       role: 'assistant',
     };

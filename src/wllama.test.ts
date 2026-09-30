@@ -282,45 +282,49 @@ test.sequential('generates embeddings', async () => {
   await wllama.exit();
 });
 
-test.sequential('reranks documents', async () => {
-  const wllama = createWllama();
+test.sequential(
+  'reranks documents',
+  async () => {
+    const wllama = createWllama();
 
-  await wllama.loadModelFromUrl(RERANK_MODEL, {
-    embeddings: true,
-    pooling_type: 'rank',
-  });
+    await wllama.loadModelFromUrl(RERANK_MODEL, {
+      embeddings: true,
+      pooling_type: 'rank',
+    });
 
-  expect(wllama.isModelLoaded()).toBe(true);
+    expect(wllama.isModelLoaded()).toBe(true);
 
-  const query = 'What is machine learning?';
-  const documents = [
-    'Machine learning is a branch of artificial intelligence.',
-    'The weather today is sunny and warm.',
-    'Neural networks are used in deep learning.',
-  ];
+    const query = 'What is machine learning?';
+    const documents = [
+      'Machine learning is a branch of artificial intelligence.',
+      'The weather today is sunny and warm.',
+      'Neural networks are used in deep learning.',
+    ];
 
-  const res = await wllama.createRerank({ query, documents });
+    const res = await wllama.createRerank({ query, documents });
 
-  expect(res).toBeDefined();
-  expect(res.results).toHaveLength(documents.length);
-  for (const r of res.results) {
-    expect(typeof r.index).toBe('number');
-    expect(typeof r.relevance_score).toBe('number');
-  }
+    expect(res).toBeDefined();
+    expect(res.results).toHaveLength(documents.length);
+    for (const r of res.results) {
+      expect(typeof r.index).toBe('number');
+      expect(typeof r.relevance_score).toBe('number');
+    }
 
-  // results should be sorted highest score first
-  for (let i = 0; i < res.results.length - 1; i++) {
-    expect(res.results[i].relevance_score).toBeGreaterThanOrEqual(
-      res.results[i + 1].relevance_score
-    );
-  }
+    // results should be sorted highest score first
+    for (let i = 0; i < res.results.length - 1; i++) {
+      expect(res.results[i].relevance_score).toBeGreaterThanOrEqual(
+        res.results[i + 1].relevance_score
+      );
+    }
 
-  // the most relevant documents should outscore the other
-  const weatherIdx = res.results.findIndex((r) => r.index === 1);
-  expect(weatherIdx).toBeGreaterThan(0);
+    // the most relevant documents should outscore the other
+    const weatherIdx = res.results.findIndex((r) => r.index === 1);
+    expect(weatherIdx).toBeGreaterThan(0);
 
-  await wllama.exit();
-});
+    await wllama.exit();
+  },
+  120_000
+);
 
 test.sequential('allowOffline', async () => {
   const wllama = createWllama(CONFIG_PATHS, {

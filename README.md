@@ -69,7 +69,7 @@ Upstream-hosted examples retained by this fork:
 Install it:
 
 ```bash
-npm install wllama64@1.0.0
+npm install wllama64@1.0.1
 ```
 
 Copy `node_modules/wllama64/esm/wasm/wllama.wasm` to your app's public assets,

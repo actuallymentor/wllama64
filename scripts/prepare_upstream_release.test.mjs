@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -6,6 +7,77 @@ import {
   mergePackageMap,
   nextDownstreamVersion,
 } from './prepare_upstream_release.mjs';
+
+test('release preparation accepts the actual root manifest override', () => {
+  const forkPackage = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+  );
+  const previousUpstreamPackage = {
+    name: '@wllama/wllama',
+    version: forkPackage.wllama64.upstreamVersion,
+  };
+  const [major, minor, patch] = previousUpstreamPackage.version
+    .split('.')
+    .map(Number);
+  const result = buildReleasePackage({
+    forkPackage,
+    previousUpstreamPackage,
+    nextUpstreamPackage: {
+      ...previousUpstreamPackage,
+      version: `${major}.${minor}.${patch + 1}`,
+    },
+    upstreamCommit: 'next',
+  });
+  assert.deepEqual(result.overrides, forkPackage.overrides);
+});
+
+test('release package retains only the reviewed fork downloader override', () => {
+  const approvedOverrides = {
+    '@wdio/utils': { '@puppeteer/browsers': '3.2.3' },
+  };
+  const forkPackage = {
+    name: 'wllama64',
+    version: '1.0.1',
+    overrides: approvedOverrides,
+    wllama64: { upstreamVersion: '3.6.1' },
+  };
+  const previousUpstreamPackage = { name: '@wllama/wllama', version: '3.6.1' };
+  const nextUpstreamPackage = { ...previousUpstreamPackage, version: '3.6.2' };
+  const input = {
+    forkPackage,
+    previousUpstreamPackage,
+    nextUpstreamPackage,
+    upstreamCommit: 'next',
+  };
+
+  assert.deepEqual(buildReleasePackage(input).overrides, approvedOverrides);
+  for (const overrides of [
+    null,
+    {},
+    { 'extract-zip': 'npm:other-package@1' },
+    { '@wdio/utils': { '@puppeteer/browsers': '3.2.4' } },
+  ]) {
+    assert.throws(
+      () =>
+        buildReleasePackage({
+          ...input,
+          forkPackage: { ...forkPackage, overrides },
+        }),
+      /overrides require review/
+    );
+  }
+  assert.throws(
+    () =>
+      buildReleasePackage({
+        ...input,
+        nextUpstreamPackage: {
+          ...nextUpstreamPackage,
+          overrides: approvedOverrides,
+        },
+      }),
+    /Unsupported upstream package fields.*overrides/
+  );
+});
 
 test('maps upstream release magnitude to the downstream version', () => {
   const base = {

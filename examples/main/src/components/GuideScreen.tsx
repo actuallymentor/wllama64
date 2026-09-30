@@ -32,8 +32,9 @@ export default function GuideScreen() {
               from 25% to 50%.
             </li>
             <li>
-              Due to memory constraint of WebAssembly and emscripten, models
-              larger than 2GB will need to be split.{' '}
+              The Memory64 build supports large model files without splitting.
+              Compatibility mode and constrained browsers may require files
+              larger than 2 GiB to be split.{' '}
               <a
                 href="https://github.com/actuallymentor/wllama64?tab=readme-ov-file#split-model"
                 target="_blank"
@@ -43,12 +44,13 @@ export default function GuideScreen() {
               </a>
             </li>
             <li>
-              Large model may not fit into RAM, (again) due to memory constraint
-              of WebAssembly.
+              Memory64 supports up to 16 GiB of WebAssembly memory, but models
+              and their inference state must fit in available device memory.
             </li>
             <li>Running on smartphone maybe buggy.</li>
             <li>
-              <b>Safari is not supported</b>, due to lack of Memory64 support.
+              Browsers without shared Memory64 and JSPI support use the slower
+              compatibility build, which is limited to 4 GiB.
             </li>
           </ul>
         </div>
