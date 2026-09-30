@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Allow 20 minutes for npm scanning and CDN availability during live release verification.
 - Publish the tested npm tarball using an explicit filesystem path.
 - Initialize isolated consumer projects for npm package checks.
 - Remove the vulnerable `extract-zip` dependency from the Safari test tooling with a scoped browser-downloader override.

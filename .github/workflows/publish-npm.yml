@@ -608,7 +608,7 @@ jobs:
       - release
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
@@ -631,15 +631,22 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Verify registry and CDN propagation with bounded retries
         run: |
-          for attempt in 1 2 3 4 5; do
-            if timeout 240s npm run test:package; then
+          deadline=$((SECONDS + 20 * 60))
+          while (( SECONDS < deadline )); do
+            remaining=$((deadline - SECONDS))
+            if (( remaining <= 0 )); then
+              break
+            fi
+            attempt_timeout=$((remaining < 240 ? remaining : 240))
+            if timeout "${attempt_timeout}s" npm run test:package; then
               exit 0
             fi
-            if [[ "$attempt" != 5 ]]; then
-              sleep 30
+            remaining=$((deadline - SECONDS))
+            if (( remaining > 0 )); then
+              sleep "$((remaining < 30 ? remaining : 30))"
             fi
           done
-          echo 'Published npm/CDN inference failed after five attempts' >&2
+          echo 'Published npm/CDN inference failed after the 20-minute availability window' >&2
           exit 1
 
   report-failure:
