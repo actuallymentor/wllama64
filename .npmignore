@@ -8,6 +8,7 @@
 /build
 /build-*
 /cache
+/tmp
 /scripts/memory64_stress*
 /compat
 /dev
