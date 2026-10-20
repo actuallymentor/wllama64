@@ -1,4 +1,5 @@
 let accessHandle;
+let writtenBytes = 0;
 let abortController = new AbortController();
 
 async function openFile(filename) {
@@ -7,15 +8,40 @@ async function openFile(filename) {
   const fileHandler = await cacheDir.getFileHandle(filename, { create: true });
   accessHandle = await fileHandler.createSyncAccessHandle();
   accessHandle.truncate(0); // clear file content
+  writtenBytes = 0;
 }
 
+// write() may write less than asked; on quota errors Chrome can return a bogus count instead of throwing
 async function writeFile(buf) {
-  accessHandle.write(buf);
+  const bytes = ArrayBuffer.isView(buf)
+    ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+    : new Uint8Array(buf);
+  let done = 0;
+  while (done < bytes.byteLength) {
+    const rest = bytes.subarray(done);
+    const n = accessHandle.write(rest, { at: writtenBytes });
+    if (!Number.isSafeInteger(n) || n <= 0 || n > rest.byteLength) {
+      throw new Error(
+        `OPFS Worker: write failed at offset ${writtenBytes} (returned ${n}), storage quota may be exceeded`
+      );
+    }
+    done += n;
+    writtenBytes += n;
+  }
 }
 
 async function closeFile() {
-  accessHandle.flush();
-  accessHandle.close();
+  try {
+    accessHandle.flush();
+    const size = accessHandle.getSize();
+    if (size !== writtenBytes) {
+      throw new Error(
+        `OPFS Worker: wrote ${writtenBytes} bytes but file has ${size} bytes`
+      );
+    }
+  } finally {
+    accessHandle.close();
+  }
 }
 
 async function writeTextFile(filename, str) {

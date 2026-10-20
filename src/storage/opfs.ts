@@ -26,14 +26,21 @@ export class OPFSBackend implements StorageBackend {
     const writable = await openWritable(key);
     await writable.truncate(0);
     const reader = stream.getReader();
+    let closing = false;
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         await writable.write(value);
       }
-    } finally {
+      closing = true;
       await writable.close();
+    } catch (e) {
+      // never keep a partial file
+      if (!closing) await writable.close().catch(() => {});
+      await reader.cancel(e).catch(() => {});
+      await this.delete(key);
+      throw e;
     }
   }
 
@@ -112,8 +119,11 @@ async function openWritable(fileName: string): Promise<{
     },
     write: (value) => workerExec({ action: 'write', buf: value }),
     close: async () => {
-      await workerExec({ action: 'close' });
-      worker.terminate();
+      try {
+        await workerExec({ action: 'close' });
+      } finally {
+        worker.terminate();
+      }
     },
   };
 }

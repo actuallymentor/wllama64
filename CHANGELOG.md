@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1] - 2026-10-20
+
+### Fixed
+
+- Stop OPFS cache writes from silently truncating large models. The worker now loops on partial `FileSystemSyncAccessHandle.write()` results with explicit offsets, treats bogus counts (Chrome returns an error code when storage quota runs out) as failures, and verifies the flushed file size.
+- Reject downloads whose stored size does not match the received bytes or `Content-Length`, and delete the partial file instead of caching it. This also covers `loadModelFromUrl(..., { useCache: false })`, which downloads through the same cache.
+
 ## [1.1.0] - 2026-10-20
 
 ### Changed
