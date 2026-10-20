@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.0] - 2026-10-20
+
+### Changed
+
+- Sync upstream Wllama 3.8.1 at [`7ed17361`](https://github.com/ngxson/wllama/commit/7ed17361caf221a84aa1e80ca85a3d6324f3af85).
+- Rebuild and verify the Memory64 and wasm32 compatibility artifacts.
 ## [1.0.1] - 2026-09-30
 
 ### Fixed
