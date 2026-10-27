@@ -942,6 +942,10 @@ struct wllama_context
     PARSE_REQ(glue_msg_slot_req);
     glue_msg_slot_res res;
 
+    // a busy slot makes the server defer the task, but defer() is not supported in wllama
+    if (!readers.empty())
+      throw app_exception("Slot save/restore needs all requests to finish first");
+
     const std::string &action = req.action.value;
     server_task_type type;
     if (action == "save")

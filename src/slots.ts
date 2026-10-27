@@ -7,6 +7,18 @@ const MAGIC = 'wllama64-slot-v1';
 
 const storage = new OPFSBackend();
 
+// bytes hashed at the end of each model file; tensor data lives there, so fine-tunes with equal size still differ
+const SAMPLE_BYTES = 1024 * 1024;
+
+const sampleHash = async (blobs: Blob[]): Promise<string> => {
+  const samples = blobs.map((b) => b.slice(Math.max(0, b.size - SAMPLE_BYTES)));
+  const data = await new Blob(samples).arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return [...new Uint8Array(digest)]
+    .map((x) => x.toString(16).padStart(2, '0'))
+    .join('');
+};
+
 export interface SlotInfo {
   key: string;
   n_tokens: number;
@@ -25,12 +37,24 @@ export type SlotRunner = (
  */
 export class SlotStore {
   private nextFileId = 0;
+  private fingerprint: Promise<Record<string, unknown>> | null = null;
 
   constructor(
     private proxy: ProxyToWorker,
     private run: SlotRunner,
-    private fingerprint: Record<string, unknown>
+    private modelBlobs: Blob[],
+    private params: Record<string, unknown>
   ) {}
+
+  // computed on first use, so loading a model never pays for the hash
+  private getFingerprint(): Promise<Record<string, unknown>> {
+    this.fingerprint ??= sampleHash(this.modelBlobs).then((model_hash) => ({
+      ...this.params,
+      model_bytes: this.modelBlobs.reduce((sum, b) => sum + b.size, 0),
+      model_hash,
+    }));
+    return this.fingerprint;
+  }
 
   async save(key: string): Promise<SlotInfo> {
     const filepath = `/tmp/slot-${this.nextFileId++}.bin`;
@@ -38,7 +62,7 @@ export class SlotStore {
     const state = await this.proxy.fileTake(filepath);
 
     const header = new TextEncoder().encode(
-      JSON.stringify({ magic: MAGIC, fingerprint: this.fingerprint })
+      JSON.stringify({ magic: MAGIC, fingerprint: await this.getFingerprint() })
     );
     const headerLen = new Uint32Array([header.byteLength]);
     const blob = new Blob([headerLen, header, state]);
@@ -72,8 +96,9 @@ export class SlotStore {
         'inference_error'
       );
     }
-    const mismatch = Object.keys(this.fingerprint).filter(
-      (k) => header.fingerprint?.[k] !== this.fingerprint[k]
+    const fingerprint = await this.getFingerprint();
+    const mismatch = Object.keys(fingerprint).filter(
+      (k) => header.fingerprint?.[k] !== fingerprint[k]
     );
     if (mismatch.length > 0) {
       throw new WllamaError(

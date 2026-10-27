@@ -549,6 +549,19 @@ test.sequential('saves and restores slot', async () => {
     max_tokens: 8,
     temperature: 0.0,
   });
+  // refused while a request is running
+  let busyError = '';
+  await wllama.createCompletion({
+    prompt,
+    max_tokens: 4,
+    stream: true,
+    onData: () => {
+      if (!busyError) {
+        wllama.saveSlot('busy').catch((e) => (busyError = e.message));
+      }
+    },
+  });
+  expect(busyError).toMatch(/finish/);
   const saved = await wllama.saveSlot('test-slot');
   expect(saved.n_tokens).toBeGreaterThan(10);
   expect(saved.n_bytes).toBeGreaterThan(0);
