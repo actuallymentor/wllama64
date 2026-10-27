@@ -5,7 +5,7 @@
 It contains llama.cpp compiled to Wasm plus browser APIs for model downloads,
 caching, compatibility, and inference. The package API remains named `Wllama`.
 
-Release `1.1.1` is based on upstream Wllama `3.8.1`
+Release `1.2.0` is based on upstream Wllama `3.8.1`
 ([`7ed17361`](https://github.com/ngxson/wllama/commit/7ed17361caf221a84aa1e80ca85a3d6324f3af85)). The canonical fork
 is [actuallymentor/wllama64](https://github.com/actuallymentor/wllama64).
 

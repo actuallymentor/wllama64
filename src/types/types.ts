@@ -9,6 +9,8 @@ export interface LoadModelParams {
   n_gpu_layers?: number;
   // by default, on multi-thread build, we take half number of available threads (hardwareConcurrency / 2)
   n_threads?: number;
+  // threads for prompt processing (batch); default: n_threads
+  n_threads_batch?: number;
   embeddings?: boolean;
   offload_kqv?: boolean;
   // maximum number of parallel requests (completions, embeddings, ...); default: 4
@@ -47,6 +49,11 @@ export interface LoadModelParams {
   cache_type_v?: 'f32' | 'f16' | 'q8_0' | 'q5_1' | 'q5_0' | 'q4_1' | 'q4_0';
   flash_attn?: boolean; // true is auto, false is disabled
   swa_full?: boolean;
+  // max context checkpoints per slot, used by hybrid/recurrent models
+  n_ctx_checkpoints?: number;
+  checkpoint_min_step?: number;
+  // RAM budget of the server prompt cache in MiB (-1 = no limit, 0 = disabled); default: 256
+  cache_ram_mib?: number;
   chat_template?: string;
   jinja?: boolean;
   reasoning?: boolean;

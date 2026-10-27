@@ -265,6 +265,7 @@ struct wllama_context
   // one reader per in-flight request, keyed by req_id; erasing an entry cancels its unfinished tasks
   std::unordered_map<int, std::unique_ptr<server_response_reader>> readers;
   int next_req_id = 1;
+  int last_id_slot = 0; // slot of the last finished completion
   std::unique_ptr<const server_context_meta> meta;
 
   // the one inside ctx_server is private, so we keep our own copy
@@ -434,7 +435,7 @@ struct wllama_context
 
     params.n_ctx = req.n_ctx.value;
     params.cpuparams.n_threads = req.n_threads.value;
-    params.cpuparams_batch.n_threads = req.n_threads.value;
+    params.cpuparams_batch.n_threads = req.n_threads_batch.not_null() ? req.n_threads_batch.value : req.n_threads.value;
     if (req.embeddings.not_null())
       params.embedding = req.embeddings.value;
     if (req.n_batch.not_null())
@@ -480,6 +481,8 @@ struct wllama_context
       params.n_ctx_checkpoints = req.n_ctx_checkpoints.value;
     if (req.checkpoint_min_step.not_null())
       params.checkpoint_min_step = req.checkpoint_min_step.value;
+    if (req.cache_ram_mib.not_null())
+      params.cache_ram_mib = req.cache_ram_mib.value;
 
     // template params
     if (req.chat_template.not_null())
@@ -897,6 +900,8 @@ struct wllama_context
       else
       {
         // completion result
+        if (auto *fin = dynamic_cast<server_task_result_cmpl_final *>(result.get()))
+          last_id_slot = fin->id_slot;
         data_json = result->to_json();
       }
     }
@@ -929,6 +934,34 @@ struct wllama_context
     }
 
     res.success.value = true;
+    return res;
+  }
+
+  glue_msg_slot_res action_slot(const char *req_raw)
+  {
+    PARSE_REQ(glue_msg_slot_req);
+    glue_msg_slot_res res;
+
+    const std::string &action = req.action.value;
+    server_task_type type;
+    if (action == "save")
+      type = SERVER_TASK_TYPE_SLOT_SAVE;
+    else if (action == "restore")
+      type = SERVER_TASK_TYPE_SLOT_RESTORE;
+    else
+      throw app_exception("Unknown slot action: " + action);
+
+    auto rd = std::make_unique<server_response_reader>(ctx_server.get_response_reader());
+
+    server_task task = server_task(type);
+    task.id = rd->get_new_id();
+    task.slot_action.id_slot = req.id_slot.value < 0 ? last_id_slot : req.id_slot.value;
+    task.slot_action.filename = req.filepath.value;
+    task.slot_action.filepath = req.filepath.value;
+    rd->post_task(std::move(task));
+
+    res.success.value = true;
+    res.req_id.value = register_reader(std::move(rd));
     return res;
   }
 

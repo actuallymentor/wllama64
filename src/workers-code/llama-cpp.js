@@ -547,6 +547,19 @@ onmessage = async (e) => {
     return;
   }
 
+  if (verb === 'fs.take') {
+    const argPath = args[0];
+    try {
+      // read a file written by wasm, then free it
+      const data = Module['FS'].readFile(argPath);
+      Module['FS'].unlink(argPath);
+      msg({ callbackId, result: data.buffer }, [data.buffer]);
+    } catch (err) {
+      handleError(err);
+    }
+    return;
+  }
+
   if (verb === 'wllama.start') {
     await runWasmCall(callbackId, async () => {
       try {

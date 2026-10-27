@@ -106,7 +106,7 @@
     "test:safari": "BROWSER=safari vitest",
     "test:wgpu": "AUTO=1 WEBGPU=1 vitest run"
   },
-  "version": "1.1.1",
+  "version": "1.2.0",
   "wllama64": {
     "upstreamPackage": "@wllama/wllama",
     "upstreamVersion": "3.8.1",

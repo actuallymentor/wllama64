@@ -104,6 +104,41 @@ await wllama.loadModel(files, {
 });
 ```
 
+wllama64 GPU defaults (explicit params always win):
+
+- Firefox: `n_gpu_layers` defaults to 0, its WebGPU readback is slower than CPU ([bugzilla 1870699](https://bugzilla.mozilla.org/show_bug.cgi?id=1870699)). Set `n_gpu_layers` to force GPU.
+- KV cache: WebGPU handles `f32`, `f16`, `q8_0`, `q4_0`. Other `cache_type_k`/`cache_type_v` values log a warning, they run on CPU.
+- Flash attention: left on auto, llama.cpp turns it off when the GPU cannot run it (needs the WebGPU `subgroups` feature). A quantized V cache needs flash attention, so it can fail to load on such GPUs.
+- Adapter vendor, features and `maxStorageBufferBindingSize` are logged at debug level on load.
+
+### Performance params
+
+```js
+await wllama.loadModel(files, {
+  n_threads: 4, // generation threads
+  n_threads_batch: 8, // prompt processing threads, default: n_threads
+  cache_ram_mib: 256, // prompt cache budget, default: 256 (llama.cpp default 8192 can exhaust the wasm heap)
+  n_ctx_checkpoints: 8, // context checkpoints per slot (hybrid/recurrent models)
+  checkpoint_min_step: 8192,
+});
+```
+
+### Save and restore KV cache
+
+Persist the KV cache of the last finished completion to OPFS and skip prompt processing in a later session. Memory64 build only (not compat mode).
+
+```js
+await wllama.createCompletion({ prompt: longSystemPrompt, max_tokens: 1 });
+await wllama.saveSlot('my-agent'); // { key, n_tokens, n_bytes, t_ms }
+
+// later, same model and load params
+await wllama.restoreSlot('my-agent');
+await wllama.listSlots(); // ['my-agent']
+await wllama.deleteSlot('my-agent');
+```
+
+`restoreSlot()` refuses slots saved with a different model, llama.cpp build, `n_ctx`, `n_parallel`, `kv_unified` or KV cache type.
+
 ### Prepare your model
 
 - It is recommended to split the model into **chunks of maximum 512MB**. This will result in slightly faster download speed (because multiple splits can be downloaded in parallel), and also prevent some out-of-memory issues. **See the "Split model" section below for more details.**
