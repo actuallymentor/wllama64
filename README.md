@@ -137,7 +137,7 @@ await wllama.listSlots(); // ['my-agent']
 await wllama.deleteSlot('my-agent');
 ```
 
-`restoreSlot()` refuses slots saved with a different model, llama.cpp build, `n_ctx`, `n_parallel`, `kv_unified` or KV cache type.
+`restoreSlot()` refuses slots saved with a different model, llama.cpp build, `n_ctx`, `n_parallel`, `kv_unified`, KV cache type or RoPE/YaRN params. Model identity = file size + SHA-256 of the last 1 MiB of each file (no full-model hash, to keep saves fast).
 
 ### Prepare your model
 

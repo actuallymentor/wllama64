@@ -662,6 +662,11 @@ export class Wllama {
           rope_scaling_type: params.rope_scaling_type,
           rope_freq_base: params.rope_freq_base,
           rope_freq_scale: params.rope_freq_scale,
+          yarn_ext_factor: params.yarn_ext_factor,
+          yarn_attn_factor: params.yarn_attn_factor,
+          yarn_beta_fast: params.yarn_beta_fast,
+          yarn_beta_slow: params.yarn_beta_slow,
+          yarn_orig_ctx: params.yarn_orig_ctx,
         }
       );
       this.logger().debug({ loadedCtxInfo });
