@@ -80,5 +80,10 @@ test('no adapter or CPU-only keeps params', async () => {
   expect(await applyGpuPolicy({ n_gpu_layers: 0 }, logger)).toEqual({
     n_gpu_layers: 0,
   });
+  // no shader-f16: ggml-webgpu is not used
+  mockNavigator('Chrome/140.0', ['subgroups']);
+  expect(await applyGpuPolicy({ cache_type_k: 'q5_1' }, logger)).toEqual({
+    cache_type_k: 'q5_1',
+  });
   expect(logger.warn).not.toHaveBeenCalled();
 });

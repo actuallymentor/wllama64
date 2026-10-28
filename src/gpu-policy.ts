@@ -49,6 +49,8 @@ export const applyGpuPolicy = async (
   const adapter = await getGpuAdapterInfo();
   if (!adapter) return params;
   logger.debug('WebGPU adapter:', adapter);
+  // ggml-webgpu requires shader-f16; without it everything runs on CPU
+  if (!adapter.features.includes('shader-f16')) return params;
 
   // a KV buffer on WebGPU with such a type aborts the wasm, so keep the KV cache on CPU
   const cpuKvTypes = [params.cache_type_k, params.cache_type_v].filter(
