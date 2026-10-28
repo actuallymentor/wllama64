@@ -25,7 +25,7 @@ const chromeArgsWebGPU = [
         '--use-angle=vulkan',
         '--use-vulkan=native',
         '--disable-vulkan-surface',
-        '--enable-dawn-features=allow_unsafe_apis',
+        '--enable-dawn-features=allow_unsafe_apis,vulkan_enable_f16_on_nvidia',
       ]
     : []),
 ];

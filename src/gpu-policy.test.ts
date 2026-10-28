@@ -49,9 +49,18 @@ test('warns on KV types WebGPU cannot use', async () => {
   mockNavigator('Chrome/140.0', ['shader-f16', 'subgroups']);
   const logger = createLogger();
   const params = { cache_type_k: 'q5_1', cache_type_v: 'q8_0' } as const;
-  expect(await applyGpuPolicy(params, logger)).toEqual(params);
+  // KV cache moves to CPU
+  expect(await applyGpuPolicy(params, logger)).toEqual({
+    ...params,
+    no_kv_offload: true,
+  });
   expect(logger.warn).toHaveBeenCalledTimes(1);
   expect(logger.warn.mock.calls[0][0]).toMatch(/q5_1/);
+
+  // explicit no_kv_offload is kept
+  const forced = { ...params, no_kv_offload: false };
+  expect(await applyGpuPolicy(forced, logger)).toEqual(forced);
+  expect(logger.warn.mock.calls[1][0]).toMatch(/fail to load/);
 });
 
 test('warns on quantized V cache without subgroups', async () => {

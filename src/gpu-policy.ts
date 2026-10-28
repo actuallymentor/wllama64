@@ -50,12 +50,22 @@ export const applyGpuPolicy = async (
   if (!adapter) return params;
   logger.debug('WebGPU adapter:', adapter);
 
-  const kvTypes = new Set([params.cache_type_k, params.cache_type_v]);
-  for (const type of kvTypes) {
-    if (type && !GPU_KV_TYPES.includes(type)) {
+  // a KV buffer on WebGPU with such a type aborts the wasm, so keep the KV cache on CPU
+  const cpuKvTypes = [params.cache_type_k, params.cache_type_v].filter(
+    (type) => type && !GPU_KV_TYPES.includes(type)
+  );
+  if (cpuKvTypes.length > 0) {
+    const types = [...new Set(cpuKvTypes)].join(', ');
+    const hint = `use one of: ${GPU_KV_TYPES.join(', ')}`;
+    if (params.no_kv_offload === false) {
       logger.warn(
-        `KV cache type ${type} is not supported by WebGPU and runs on CPU; use one of: ${GPU_KV_TYPES.join(', ')}`
+        `KV cache type ${types} is not supported by WebGPU and no_kv_offload is false; the model will fail to load. ${hint}`
       );
+    } else {
+      logger.warn(
+        `KV cache type ${types} is not supported by WebGPU, keeping KV cache on CPU (much slower); ${hint}`
+      );
+      params = { ...params, no_kv_offload: true };
     }
   }
 

@@ -107,7 +107,7 @@ await wllama.loadModel(files, {
 wllama64 GPU defaults (explicit params always win):
 
 - Firefox: `n_gpu_layers` defaults to 0, its WebGPU readback is slower than CPU ([bugzilla 1870699](https://bugzilla.mozilla.org/show_bug.cgi?id=1870699)). Set `n_gpu_layers` to force GPU.
-- KV cache: WebGPU handles `f32`, `f16`, `q8_0`, `q4_0`. Other `cache_type_k`/`cache_type_v` values log a warning, they run on CPU.
+- KV cache: WebGPU handles `f32`, `f16`, `q8_0`, `q4_0`. Other `cache_type_k`/`cache_type_v` values log a warning and set `no_kv_offload: true` (KV cache on CPU, much slower generation); setting `no_kv_offload: false` with them fails the load.
 - Flash attention: left on auto, llama.cpp turns it off when the GPU cannot run it (needs the WebGPU `subgroups` feature). A quantized V cache needs flash attention, so it can fail to load on such GPUs.
 - Adapter vendor, features and `maxStorageBufferBindingSize` are logged at debug level on load.
 
