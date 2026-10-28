@@ -145,7 +145,11 @@ test.sequential('generates completion with WebGPU', async () => {
 
 test.sequential(
   'quantized KV cache uses flash attention on WebGPU',
-  async () => {
+  async (ctx) => {
+    // WebGPU flash attention needs subgroups
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter?.features.has('subgroups')) ctx.skip();
+
     const wllama = createWllama();
 
     await wllama.loadModelFromUrl(SMOL_MODEL, {
