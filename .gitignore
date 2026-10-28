@@ -26,3 +26,6 @@ a.out.js
 a.out.wasm
 
 /compat/wasm/*.wasm
+
+.env
+.env*.local
