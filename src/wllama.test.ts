@@ -514,6 +514,86 @@ test.skip('stack trace (OOB memory access)', async () => {
   await wllama.exit();
 });
 
+test.sequential('loads model with n_threads_batch', async () => {
+  const wllama = createWllama();
+
+  await wllama.loadModelFromUrl(TINY_MODEL, {
+    n_ctx: 1024,
+    n_threads: 1,
+    n_threads_batch: 2,
+  });
+
+  // pool is sized for the batch threads even when n_threads is 1
+  expect(wllama.isMultithread()).toBe(true);
+  expect(wllama.getNumThreads()).toBe(1);
+
+  const res = await wllama.createCompletion({
+    prompt: 'Once upon a time',
+    max_tokens: 5,
+    temperature: 0.0,
+  });
+  expect(res.choices[0].text.length).toBeGreaterThan(0);
+
+  await wllama.exit();
+});
+
+test.sequential('saves and restores slot', async () => {
+  const prompt = 'Once upon a time, there was a little girl named Lily.';
+  // default n_parallel, so the completion may run in any slot
+  const params = { n_ctx: 1024 };
+
+  const wllama = createWllama();
+  await wllama.loadModelFromUrl(TINY_MODEL, params);
+  const before = await wllama.createCompletion({
+    prompt,
+    max_tokens: 8,
+    temperature: 0.0,
+  });
+  // refused while a request is running
+  let busyError = '';
+  await wllama.createCompletion({
+    prompt,
+    max_tokens: 4,
+    stream: true,
+    onData: () => {
+      if (!busyError) {
+        wllama.saveSlot('busy').catch((e) => (busyError = e.message));
+      }
+    },
+  });
+  expect(busyError).toMatch(/finish/);
+  const saved = await wllama.saveSlot('test-slot');
+  expect(saved.n_tokens).toBeGreaterThan(10);
+  expect(saved.n_bytes).toBeGreaterThan(0);
+  expect(await wllama.listSlots()).toContain('test-slot');
+  await wllama.exit();
+
+  const wllama2 = createWllama();
+  await wllama2.loadModelFromUrl(TINY_MODEL, params);
+  const restored = await wllama2.restoreSlot('test-slot');
+  expect(restored.n_tokens).toBe(saved.n_tokens);
+  const after = await wllama2.createCompletion({
+    prompt,
+    max_tokens: 8,
+    temperature: 0.0,
+  });
+  expect(after.choices[0].text).toBe(before.choices[0].text);
+  // restored tokens are reused, so only the new tail is evaluated
+  expect(after.usage?.prompt_tokens_details?.cached_tokens).toBeGreaterThan(0);
+  await wllama2.exit();
+
+  // different context size must be refused
+  const wllama3 = createWllama();
+  await wllama3.loadModelFromUrl(TINY_MODEL, { ...params, n_ctx: 512 });
+  await expect(wllama3.restoreSlot('test-slot')).rejects.toThrow(/n_ctx/);
+  await expect(wllama3.restoreSlot('missing-slot')).rejects.toThrow(
+    /not found/
+  );
+  await wllama3.deleteSlot('test-slot');
+  expect(await wllama3.listSlots()).not.toContain('test-slot');
+  await wllama3.exit();
+});
+
 test.sequential('cleans up resources', async () => {
   const wllama = createWllama();
   await wllama.loadModelFromUrl(TINY_MODEL);

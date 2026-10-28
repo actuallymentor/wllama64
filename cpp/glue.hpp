@@ -559,6 +559,9 @@ struct glue_msg_load_req
   GLUE_FIELD_NULLABLE(str, reasoning_format)
   GLUE_FIELD_NULLABLE(bool, skip_chat_parsing)
   GLUE_FIELD_NULLABLE(bool, prefill_assistant)
+  // wllama64 fields: keep them after all upstream fields, so the upstream compat wasm can still parse this message
+  GLUE_FIELD_NULLABLE(int, n_threads_batch)
+  GLUE_FIELD_NULLABLE(int, cache_ram_mib)
 };
 
 struct glue_msg_load_res
@@ -694,4 +697,21 @@ struct glue_msg_test_backend_ops_res
   GLUE_HANDLER("tbop_res")
   GLUE_FIELD(int, retcode)
   GLUE_FIELD(bool, success)
+};
+
+/////////
+
+struct glue_msg_slot_req
+{
+  GLUE_HANDLER("slot_req")
+  GLUE_FIELD(str, action) // save or restore
+  GLUE_FIELD(int, id_slot) // -1 = slot of the last finished completion
+  GLUE_FIELD(str, filepath)
+};
+
+struct glue_msg_slot_res
+{
+  GLUE_HANDLER("slot_res")
+  GLUE_FIELD(bool, success)
+  GLUE_FIELD(int, req_id)
 };

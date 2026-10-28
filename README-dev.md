@@ -5,7 +5,7 @@
 It contains llama.cpp compiled to Wasm plus browser APIs for model downloads,
 caching, compatibility, and inference. The package API remains named `Wllama`.
 
-Release `1.1.1` is based on upstream Wllama `3.8.1`
+Release `1.2.0` is based on upstream Wllama `3.8.1`
 ([`7ed17361`](https://github.com/ngxson/wllama/commit/7ed17361caf221a84aa1e80ca85a3d6324f3af85)). The canonical fork
 is [actuallymentor/wllama64](https://github.com/actuallymentor/wllama64).
 
@@ -346,6 +346,12 @@ If Firefox reports `browserContext.newPage` with `_page` and its debug logs show
 Run `npm run test:wgpu` on a machine with a WebGPU adapter that supports `shader-f16`. The suite requires native GPU layer offload and generated text; CPU fallback does not pass. Current hosted software adapters do not meet this requirement.
 
 On Linux Vulkan drivers, use `WEBGPU_VULKAN=1 npm run test:wgpu`. Docker needs `/dev/dri` passed through and a Vulkan driver such as `mesa-vulkan-drivers`. This path was validated on Intel Gen12LP with Mesa 22.3.6. Chromium SwiftShader lacks `shader-f16` and cannot validate this backend.
+
+NVIDIA (validated on an RTX 4090 RunPod pod, driver 595, Ubuntu 22.04):
+
+- Install `libegl1 libgl1 libglx0 libglvnd0 vulkan-tools`. Without libglvnd the NVIDIA Vulkan ICD fails with `Could not get 'vkCreateInstance'` and `vulkaninfo` shows only llvmpipe.
+- NVIDIA has no `storageInputOutput16`, so Dawn hides `shader-f16` by default. `WEBGPU_VULKAN=1` enables the Dawn toggle `vulkan_enable_f16_on_nvidia`.
+- Use Playwright's default headless shell. Full Chromium (`channel: 'chromium'`) got no adapter there.
 
 ## Release validation
 

@@ -337,6 +337,16 @@ export const GLUE_MESSAGE_PROTOTYPES: { [name: string]: GlueMessageProto } = {
         "type": "bool",
         "name": "prefill_assistant",
         "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "n_threads_batch",
+        "isNullable": true
+      },
+      {
+        "type": "int",
+        "name": "cache_ram_mib",
+        "isNullable": true
       }
     ]
   },
@@ -674,6 +684,45 @@ export const GLUE_MESSAGE_PROTOTYPES: { [name: string]: GlueMessageProto } = {
         "isNullable": false
       }
     ]
+  },
+  "slot_req": {
+    "name": "slot_req",
+    "structName": "glue_msg_slot_req",
+    "className": "GlueMsgSlotReq",
+    "fields": [
+      {
+        "type": "str",
+        "name": "action",
+        "isNullable": false
+      },
+      {
+        "type": "int",
+        "name": "id_slot",
+        "isNullable": false
+      },
+      {
+        "type": "str",
+        "name": "filepath",
+        "isNullable": false
+      }
+    ]
+  },
+  "slot_res": {
+    "name": "slot_res",
+    "structName": "glue_msg_slot_res",
+    "className": "GlueMsgSlotRes",
+    "fields": [
+      {
+        "type": "bool",
+        "name": "success",
+        "isNullable": false
+      },
+      {
+        "type": "int",
+        "name": "req_id",
+        "isNullable": false
+      }
+    ]
   }
 };
 
@@ -749,6 +798,8 @@ export interface GlueMsgLoadReq {
   reasoning_format?: string | undefined;
   skip_chat_parsing?: boolean | undefined;
   prefill_assistant?: boolean | undefined;
+  n_threads_batch?: number | undefined;
+  cache_ram_mib?: number | undefined;
 }
 
 // struct glue_msg_load_res
@@ -872,5 +923,20 @@ export interface GlueMsgTestBackendOpsRes {
   success: boolean;
 }
 
+// struct glue_msg_slot_req
+export interface GlueMsgSlotReq {
+  _name: "slot_req";
+  action: string;
+  id_slot: number;
+  filepath: string;
+}
 
-export type GlueMsg = GlueMsgError | GlueMsgLoadReq | GlueMsgLoadRes | GlueMsgCompletionReq | GlueMsgCompletionRes | GlueMsgEmbeddingReq | GlueMsgEmbeddingRes | GlueMsgRerankReq | GlueMsgRerankRes | GlueMsgSystemoneReq | GlueMsgSystemoneRes | GlueMsgGetResultReq | GlueMsgGetResultRes | GlueMsgCancelReq | GlueMsgCancelRes | GlueMsgTestBackendOpsReq | GlueMsgTestBackendOpsRes;
+// struct glue_msg_slot_res
+export interface GlueMsgSlotRes {
+  _name: "slot_res";
+  success: boolean;
+  req_id: number;
+}
+
+
+export type GlueMsg = GlueMsgError | GlueMsgLoadReq | GlueMsgLoadRes | GlueMsgCompletionReq | GlueMsgCompletionRes | GlueMsgEmbeddingReq | GlueMsgEmbeddingRes | GlueMsgRerankReq | GlueMsgRerankRes | GlueMsgSystemoneReq | GlueMsgSystemoneRes | GlueMsgGetResultReq | GlueMsgGetResultRes | GlueMsgCancelReq | GlueMsgCancelRes | GlueMsgTestBackendOpsReq | GlueMsgTestBackendOpsRes | GlueMsgSlotReq | GlueMsgSlotRes;

@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.2.0] - 2026-10-27
+
+### Added
+
+- `n_threads_batch` load param (#11): separate prompt-processing threads; pthread pool holds both counts when they differ.
+- `cache_ram_mib`, `n_ctx_checkpoints`, `checkpoint_min_step` load params (#12). `cache_ram_mib` defaults to 256 instead of llama.cpp's 8192, which can exhaust the wasm heap.
+- `saveSlot()`, `restoreSlot()`, `deleteSlot()`, `listSlots()` (#12): persist the KV cache of the last completion to OPFS. Restore refuses a different model, llama.cpp build, context or KV type. Memory64 build only.
+- WebGPU adapter vendor, features and storage binding limit logged at debug level on load.
+
+### Changed
+
+- Firefox defaults to `n_gpu_layers: 0`; its WebGPU is much slower than CPU. Explicit `n_gpu_layers` still wins.
+- `cache_type_k`/`cache_type_v` that WebGPU cannot run (e.g. `q5_1`) set `no_kv_offload: true` with a warning, instead of aborting the wasm on load. Weights stay on the GPU; generation runs at CPU speed.
+- Warn on a quantized V cache on a GPU without `subgroups`.
+- WebGPU suite covers quantized KV, the KV fallback and slot save/restore. `WEBGPU_VULKAN=1` enables `shader-f16` on NVIDIA; validated on an RTX 4090.
+
 ## [1.1.1] - 2026-10-20
 
 ### Fixed

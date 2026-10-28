@@ -40,6 +40,7 @@ interface TaskParam {
     | 'module.init'
     | 'fs.alloc'
     | 'fs.write'
+    | 'fs.take'
     | 'fs.read_res'
     | 'wllama.start'
     | 'wllama.action'
@@ -288,6 +289,30 @@ export class ProxyToWorker {
       );
       offset += size;
     }
+  }
+
+  /**
+   * Add a file to heapfs after the module is started. Needs async file read.
+   */
+  async fileAdd(fileName: string, blob: Blob): Promise<void> {
+    await this.fileAlloc(fileName, blob.size, false);
+    this.fileBlobs.set(fileName, blob);
+  }
+
+  fileRemove(fileName: string) {
+    this.fileBlobs.delete(fileName);
+  }
+
+  /**
+   * Read a file written by wasm, then delete it from the wasm FS
+   */
+  async fileTake(path: string): Promise<Blob> {
+    const buffer: ArrayBuffer = await this.pushTask({
+      verb: 'fs.take',
+      args: [path],
+      callbackId: this.taskId++,
+    });
+    return new Blob([buffer]);
   }
 
   private async fileReadResponse(

@@ -24,6 +24,7 @@ import type {
   GlueMsgGetResultRes,
   GlueMsgLoadRes,
   GlueMsgTestBackendOpsRes,
+  GlueMsgSlotRes,
 } from './glue/messages';
 import { LIBLLAMA_VERSION } from './workers-code/generated';
 import type {
@@ -49,6 +50,8 @@ import type {
 import { LogLevel } from './types/types';
 import { getHFModelSource, type HuggingFaceParams } from './huggingface';
 import { WasmCompatFromCDN } from './wasm-from-cdn';
+import { applyGpuPolicy } from './gpu-policy';
+import { SlotStore, deleteSlot, listSlots, type SlotInfo } from './slots';
 
 export interface WllamaLogger {
   debug: typeof console.debug;
@@ -195,6 +198,8 @@ export class Wllama {
   private metadata?: ModelMetadata;
   private hasEncoder: boolean = false;
   private decoderStartToken: number = -1;
+  private slots: SlotStore | null = null;
+  private nbActiveRequests: number = 0;
 
   // note: we overlay instead of using llama-server default_template_kwargs, because we cannot transfer complex data structure via GLUE
   // overlay allow mixed data type or nested structure for kwargs
@@ -482,12 +487,17 @@ export class Wllama {
     if (this.proxy) {
       throw new WllamaError('Module is already initialized', 'load_error');
     }
+    params = await applyGpuPolicy(params, this.logger());
     // detect if we can use multi-thread and webgpu
     const supportMultiThread = await isSupportMultiThread();
     const hwConccurency = Math.floor((navigator.hardwareConcurrency || 1) / 2);
     const nbThreads = params.n_threads ?? hwConccurency;
+    const nbThreadsBatch = params.n_threads_batch ?? nbThreads;
+    // different counts create two persistent ggml threadpools; the pthread pool must fit both, or ggml waits for threads that never start
+    const nbPoolThreads =
+      nbThreads === nbThreadsBatch ? nbThreads : nbThreads + nbThreadsBatch;
     this.nbThreads = nbThreads;
-    this.useMultiThread = supportMultiThread && nbThreads > 1;
+    this.useMultiThread = supportMultiThread && nbPoolThreads > 1;
 
     // initialize the worker
     const workerResources = this.getWorkerResources();
@@ -497,7 +507,7 @@ export class Wllama {
     }
     const proxy = new ProxyToWorker(
       workerResources,
-      this.useMultiThread ? nbThreads : 0, // 0 means disable pthread
+      this.useMultiThread ? nbPoolThreads : 0, // 0 means disable pthread
       this.config.suppressNativeLog ?? false,
       this.logger()
     );
@@ -531,6 +541,7 @@ export class Wllama {
         n_gpu_layers: params.n_gpu_layers ?? 99999,
         n_ctx: params.n_ctx ?? 1024,
         n_threads: this.useMultiThread ? nbThreads : 1,
+        n_threads_batch: this.useMultiThread ? nbThreadsBatch : 1,
         n_ctx_auto: false, // not supported for now
         mmproj_path: modelFiles.mmproj
           ? `/models/${MMPROJ_FILE_NAME}`
@@ -556,6 +567,10 @@ export class Wllama {
         kv_unified: params.kv_unified ?? true,
         flash_attn: params.flash_attn,
         swa_full: params.swa_full,
+        n_ctx_checkpoints: params.n_ctx_checkpoints,
+        checkpoint_min_step: params.checkpoint_min_step,
+        // llama.cpp default (8192 MiB) can exhaust the wasm heap
+        cache_ram_mib: params.cache_ram_mib ?? 256,
         chat_template: params.chat_template,
         jinja: params.jinja,
         reasoning: params.reasoning,
@@ -630,6 +645,30 @@ export class Wllama {
       this.eogTokens = new Set(loadedCtxInfo.list_tokens_eog);
       this.mediaMarker = loadedCtxInfo.media_marker;
       this.chatTemplateKwargs = params.default_template_kwargs ?? {};
+      this.slots = new SlotStore(
+        proxy,
+        (action, filepath) => this.runSlotAction(action, filepath),
+        blobs,
+        {
+          libllama: LIBLLAMA_VERSION,
+          n_vocab: loadedCtxInfo.n_vocab,
+          n_layer: loadedCtxInfo.n_layer,
+          n_embd: loadedCtxInfo.n_embd,
+          n_ctx: loadedCtxInfo.n_ctx,
+          n_parallel: params.n_parallel ?? 4,
+          kv_unified: params.kv_unified ?? true,
+          cache_type_k: params.cache_type_k ?? 'f16',
+          cache_type_v: params.cache_type_v ?? 'f16',
+          rope_scaling_type: params.rope_scaling_type,
+          rope_freq_base: params.rope_freq_base,
+          rope_freq_scale: params.rope_freq_scale,
+          yarn_ext_factor: params.yarn_ext_factor,
+          yarn_attn_factor: params.yarn_attn_factor,
+          yarn_beta_fast: params.yarn_beta_fast,
+          yarn_beta_slow: params.yarn_beta_slow,
+          yarn_orig_ctx: params.yarn_orig_ctx,
+        }
+      );
       this.logger().debug({ loadedCtxInfo });
     } catch (error) {
       await proxy.wllamaExit().catch(() => {});
@@ -932,6 +971,38 @@ export class Wllama {
   async exit(): Promise<void> {
     await this.proxy?.wllamaExit();
     this.proxy = null as any;
+    this.slots = null;
+  }
+
+  /**
+   * Save the KV cache of the last finished completion to OPFS, so a later session can skip prompt processing.
+   * All requests must be finished. Not available in compat mode.
+   * @param key Name of the saved slot; an existing slot with the same key is replaced
+   */
+  async saveSlot(key: string): Promise<SlotInfo> {
+    return this.getSlotStore().save(key);
+  }
+
+  /**
+   * Restore a saved KV cache from OPFS. Fails if the slot was saved with a different model, context size or KV cache type.
+   * @param key Name used in `saveSlot()`
+   */
+  async restoreSlot(key: string): Promise<SlotInfo> {
+    return this.getSlotStore().restore(key);
+  }
+
+  /**
+   * Delete a saved slot from OPFS. Does nothing if the slot does not exist.
+   */
+  async deleteSlot(key: string): Promise<void> {
+    return deleteSlot(key);
+  }
+
+  /**
+   * List the keys of all saved slots
+   */
+  async listSlots(): Promise<string[]> {
+    return listSlots();
   }
 
   /**
@@ -1072,8 +1143,37 @@ export class Wllama {
     }
   }
 
+  private getSlotStore(): SlotStore {
+    this.checkModelLoaded();
+    if (this.proxy.resources.compat) {
+      throw new WllamaError(
+        'Slot save and restore is not available in compat mode'
+      );
+    }
+    if (this.nbActiveRequests > 0) {
+      throw new WllamaError(
+        'Slot save and restore needs all requests to finish first'
+      );
+    }
+    return this.slots!;
+  }
+
+  private async runSlotAction(action: 'save' | 'restore', filepath: string) {
+    const result = await this.proxy.wllamaAction<GlueMsgSlotRes>('slot', {
+      _name: 'slot_req',
+      action,
+      id_slot: -1, // slot of the last finished completion
+      filepath,
+    });
+    if (!result.success) {
+      throw new WllamaError(`Failed to ${action} slot`, 'inference_error');
+    }
+    return this.getSingleResult<any>(result.req_id, `slot ${action}`);
+  }
+
   private async getSingleResult<T>(reqId: number, task: string): Promise<T> {
     let completed = false;
+    this.nbActiveRequests++;
     try {
       while (true) {
         const chunk = await this.proxy.wllamaAction<GlueMsgGetResultRes>(
@@ -1102,6 +1202,7 @@ export class Wllama {
 
       throw new WllamaError(`No ${task} result received`, 'inference_error');
     } finally {
+      this.nbActiveRequests--;
       if (!completed) {
         await this.cancelRequest(reqId);
       }
@@ -1115,6 +1216,7 @@ export class Wllama {
   ) {
     let finalResult: any = null;
     let completed = false;
+    this.nbActiveRequests++;
 
     try {
       while (true) {
@@ -1170,6 +1272,7 @@ export class Wllama {
         }
       }
     } finally {
+      this.nbActiveRequests--;
       // any exit before the final chunk (abort, decode error, onData throw) must free the slot
       if (!completed) {
         await this.cancelRequest(reqId);

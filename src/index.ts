@@ -4,6 +4,7 @@ export * from './model-manager';
 export * from './huggingface';
 export * from './types/types';
 export * from './types/oai-compat';
+export type { SlotInfo } from './slots';
 export { CacheManager } from './cache-manager';
 export { isValidGgufFile } from './utils';
 export { default as WasmFromCDN, WasmCompatFromCDN } from './wasm-from-cdn';
